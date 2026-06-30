@@ -21,14 +21,14 @@
 /* ── Design tokens ─────────────────────────────────────────────────── */
 
 :root {
-  --bg: #0f1419;
-  --surface: #1a2332;
-  --surface-2: #243044;
-  --border: #2d3f56;
+  --bg: #102a2e;
+  --surface: #26554e;
+  --surface-2: #0e252b;
+  --border: #163747;
   --text: #e8edf4;
   --text-muted: #8b9cb3;
-  --accent: #3b82f6;
-  --accent-hover: #2563eb;
+  --accent: #225674;
+  --accent-hover: #25eb8f;
   --success: #22c55e;
   --error: #ef4444;
   --warning: #f59e0b;
