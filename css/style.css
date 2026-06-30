@@ -20,6 +20,7 @@
   --warning: #f59e0b;
   --radius: 12px;
   --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --chat-width: 320px;
 }
 
 body {
@@ -33,10 +34,21 @@ body {
   line-height: 1.5;
 }
 
+body.in-room {
+  overflow: hidden;
+}
+
 .container {
   max-width: 480px;
   margin: 0 auto;
   padding: 2rem 1.25rem;
+}
+
+body.in-room .container {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  height: 100vh;
 }
 
 .header {
@@ -188,7 +200,7 @@ input[type="text"]::placeholder {
 
 .btn-ghost {
   width: 100%;
-  margin-top: 1rem;
+  margin-top: 0.75rem;
   background: transparent;
   color: var(--text-muted);
   border: 1px solid var(--border);
@@ -213,15 +225,40 @@ input[type="text"]::placeholder {
   color: var(--success);
 }
 
-.room-header {
+/* Room layout: game + side chat */
+
+.room-layout {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+.game-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.game-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.room-info {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  margin-bottom: 0.5rem;
 }
 
-.room-header h2 {
-  font-size: 1.25rem;
+.room-info h2 {
+  font-size: 1.1rem;
   font-weight: 600;
 }
 
@@ -241,8 +278,7 @@ input[type="text"]::placeholder {
 }
 
 .connection {
-  font-size: 0.875rem;
-  margin-bottom: 1rem;
+  font-size: 0.8rem;
 }
 
 .connection.waiting {
@@ -257,13 +293,50 @@ input[type="text"]::placeholder {
   color: var(--error);
 }
 
-.chat {
-  border-top: 1px solid var(--border);
-  padding-top: 1rem;
+.controls-hint {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+#game-canvas {
+  flex: 1;
+  display: block;
+  width: 100%;
+  cursor: crosshair;
+}
+
+.chat-sidebar {
+  width: var(--chat-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  padding: 1rem;
+}
+
+.chat-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+}
+
+.chat-sidebar-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.player-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 .messages {
-  height: 200px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -299,11 +372,14 @@ input[type="text"]::placeholder {
   font-size: 0.8rem;
   color: var(--text-muted);
   font-style: italic;
+  max-width: 100%;
+  text-align: center;
 }
 
 .message-form {
   display: flex;
   gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 .message-form input {
@@ -312,4 +388,21 @@ input[type="text"]::placeholder {
   letter-spacing: normal;
   font-size: 0.95rem;
   font-family: inherit;
+}
+
+@media (max-width: 640px) {
+  .room-layout {
+    flex-direction: column;
+  }
+
+  .chat-sidebar {
+    width: 100%;
+    height: 40vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .game-area {
+    height: 60vh;
+  }
 }

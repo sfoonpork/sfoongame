@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P Rooms</title>
+  <title>Sfoon Game</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <main class="container">
-    <header class="header">
-      <h1>P2P Rooms</h1>
+  <main class="container" id="main">
+    <header class="header" id="lobby-header">
+      <h1>Sfoon Game</h1>
       <p class="subtitle">Host a room or join with a code</p>
     </header>
 
@@ -35,22 +35,31 @@
       </div>
     </section>
 
-    <section id="room" class="card hidden">
-      <div class="room-header">
-        <span class="badge" id="role-badge">Host</span>
-        <h2>Room <span id="active-code"></span></h2>
+    <section id="room" class="room-layout hidden">
+      <div class="game-area">
+        <div class="game-header">
+          <div class="room-info">
+            <span class="badge" id="role-badge">Host</span>
+            <h2>Room <span id="active-code"></span></h2>
+          </div>
+          <p id="connection-status" class="connection waiting">Connecting…</p>
+          <p class="controls-hint">WASD to move</p>
+        </div>
+        <canvas id="game-canvas"></canvas>
       </div>
-      <p id="connection-status" class="connection waiting">Connecting peer…</p>
 
-      <div class="chat">
+      <aside class="chat-sidebar">
+        <div class="chat-sidebar-header">
+          <h3>Chat</h3>
+          <span id="player-count" class="player-count">1 player</span>
+        </div>
         <div id="messages" class="messages"></div>
         <form id="message-form" class="message-form">
           <input id="message-input" type="text" placeholder="Send a message…" disabled>
           <button type="submit" class="btn btn-secondary" disabled>Send</button>
         </form>
-      </div>
-
-      <button id="leave-btn" class="btn btn-ghost">Leave Room</button>
+        <button id="leave-btn" class="btn btn-ghost">Leave Room</button>
+      </aside>
     </section>
   </main>
 
