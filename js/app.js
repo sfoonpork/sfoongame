@@ -67,11 +67,16 @@ const keys = { w: false, a: false, s: false, d: false };
 const pibbleSprite = new Image();
 const tintedSprites = new Map();
 let spriteReady = false;
+let spriteMask = null;
+
+const SPRITE_BG_THRESHOLD = 45;
 
 pibbleSprite.onload = () => {
   spriteReady = true;
   tintedSprites.clear();
+  spriteMask = buildSpriteMask();
 };
+
 pibbleSprite.src = "pibble.png";
 
 function getSpriteDimensions() {
@@ -88,8 +93,30 @@ function getSpriteDimensions() {
   };
 }
 
+function buildSpriteMask() {
+  const { w, h } = getSpriteDimensions();
+  const off = document.createElement("canvas");
+  off.width = w;
+  off.height = h;
+  const octx = off.getContext("2d");
+  octx.drawImage(pibbleSprite, 0, 0, w, h);
+
+  const imageData = octx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    if (r < SPRITE_BG_THRESHOLD && g < SPRITE_BG_THRESHOLD && b < SPRITE_BG_THRESHOLD) {
+      data[i + 3] = 0;
+    }
+  }
+  octx.putImageData(imageData, 0, 0);
+  return off;
+}
+
 function getTintedSprite(color) {
-  if (!spriteReady) return null;
+  if (!spriteReady || !spriteMask) return null;
   if (tintedSprites.has(color)) return tintedSprites.get(color);
 
   const { w, h } = getSpriteDimensions();
@@ -97,10 +124,11 @@ function getTintedSprite(color) {
   off.width = w;
   off.height = h;
   const octx = off.getContext("2d");
-  octx.drawImage(pibbleSprite, 0, 0, w, h);
+  octx.drawImage(spriteMask, 0, 0);
   octx.globalCompositeOperation = "multiply";
   octx.fillStyle = color;
   octx.fillRect(0, 0, w, h);
+  octx.globalCompositeOperation = "source-over";
 
   const entry = { canvas: off, w, h };
   tintedSprites.set(color, entry);
