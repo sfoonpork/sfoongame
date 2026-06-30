@@ -376,6 +376,10 @@ input[type="text"]::placeholder {
   color: var(--error);
 }
 
+.connection.error {
+  color: var(--error);
+}
+
 .controls-hint {
   margin-left: auto;
   font-size: 0.8rem;

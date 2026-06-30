@@ -32,10 +32,21 @@ const PEER_CONFIG = {
   port: 443,
   path: "/",
   secure: true,
+  config: {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+    ],
+  },
 };
 
 // Connection & session
-const JOIN_TIMEOUT_MS = 12000;
+const JOIN_PEER_OPEN_TIMEOUT_MS = 15000;
+const JOIN_HOST_CONN_TIMEOUT_MS = 30000;
+const WELCOME_TIMEOUT_MS = 12000;
+const GUEST_JOIN_RETRY_MS = 2000;
+const MAX_GUEST_JOIN_ATTEMPTS = 10;
 const MAX_PLAYERS = 8;
 const HOST_MIGRATION_DELAY_MS = 500;   // Successor claims host quickly
 const GUEST_RECONNECT_DELAY_MS = 2500; // Guests wait for new host to settle
@@ -100,6 +111,7 @@ let connToPlayer = new Map(); // Host only: peerId → stable playerId (UUID)
 let role = null;              // "host" | "guest"
 let joinTimeout = null;
 let reconnectTimeout = null;
+let guestJoinAttempts = 0;
 
 // --- Player & game world ---
 let myPlayerId = null;        // Stable UUID in sessionStorage (survives refresh)
@@ -522,8 +534,14 @@ function getOrCreatePlayerId() {
    ========================================================================== */
 
 function send(conn, msg) {
-  if (conn && conn.open) {
-    conn.send(JSON.stringify(msg));
+  if (!conn) return;
+  const data = JSON.stringify(msg);
+  if (conn.open) {
+    conn.send(data);
+  } else {
+    conn.once("open", () => {
+      if (conn.open) conn.send(data);
+    });
   }
 }
 
@@ -642,6 +660,7 @@ function connect() {
   myPlayerId = getOrCreatePlayerId();
   intentionalLeave = false;
   migrating = false;
+  guestJoinAttempts = 0;
   resizeCanvas();
   setConnectionState("waiting", "Connecting…");
   disableChat();
@@ -688,6 +707,8 @@ function onBecameHost() {
   const wasMigration = migrating;
   migrating = false;
   connectedToHost = true;
+  guestJoinAttempts = 0;
+  clearJoinTimeout();
 
   if (!players[myPlayerId]) {
     spawnPlayer(myPlayerId, getStoredPlayerName());
@@ -724,33 +745,67 @@ function onBecameHost() {
   }
 }
 
+function scheduleJoinTimeout(ms, onTimeout) {
+  clearJoinTimeout();
+  joinTimeout = setTimeout(() => {
+    if (!connectedToHost && !intentionalLeave) {
+      onTimeout();
+    }
+  }, ms);
+}
+
+/** Retry guest join (host ID is taken, so a host exists — do not steal host role). */
+function retryGuestJoin(message) {
+  if (intentionalLeave) return;
+
+  guestJoinAttempts++;
+  if (guestJoinAttempts > MAX_GUEST_JOIN_ATTEMPTS) {
+    clearJoinTimeout();
+    destroyPeer({ keepPlayers: true, keepMessages: true });
+    setConnectionState("error", "Could not reach host");
+    addSystemMessage(
+      "Could not connect after several tries. Ask the host to refresh their tab, then click Leave and rejoin."
+    );
+    return;
+  }
+
+  clearJoinTimeout();
+  destroyPeer({ keepPlayers: true, keepMessages: true });
+  if (message) addSystemMessage(message);
+  setConnectionState("waiting", "Joining game…");
+  reconnectTimeout = setTimeout(attemptJoinAsGuest, GUEST_JOIN_RETRY_MS);
+}
+
 /** Open anonymous Peer, connect to LOBBY_PEER_ID, send hello with playerId. */
 function attemptJoinAsGuest() {
+  clearReconnectTimeout();
   role = "guest";
   updateRoleBadge();
   setConnectionState("waiting", "Joining game…");
 
   peer = new Peer(PEER_CONFIG);
 
+  scheduleJoinTimeout(JOIN_PEER_OPEN_TIMEOUT_MS, () => {
+    retryGuestJoin("Signaling timed out — retrying…");
+  });
+
   peer.on("open", () => {
     hostConn = peer.connect(LOBBY_PEER_ID, { reliable: true });
     setupHostConnection(hostConn);
 
-    joinTimeout = setTimeout(() => {
-      if (!connectedToHost && !migrating) {
-        onNoHostFound();
-      }
-    }, JOIN_TIMEOUT_MS);
+    scheduleJoinTimeout(JOIN_HOST_CONN_TIMEOUT_MS, () => {
+      retryGuestJoin("Connection timed out — retrying…");
+    });
   });
 
   peer.on("error", () => {
     if (!connectedToHost && !migrating) {
-      scheduleReconnect("Connection failed — retrying…");
+      retryGuestJoin("Network error — retrying…");
     }
   });
 }
 
-/** No host answered within JOIN_TIMEOUT_MS — become the host ourselves. */
+/** No host exists — become the host ourselves (only used on first page load). */
 function onNoHostFound() {
   clearJoinTimeout();
   destroyPeer({ keepPlayers: true, keepMessages: true });
@@ -778,11 +833,15 @@ function setupGuestConnection(connection) {
 /** Guest side: wire outgoing connection to host; send hello on open. */
 function setupHostConnection(connection) {
   connection.on("open", () => {
-    clearJoinTimeout();
+    setConnectionState("waiting", "Waiting for host…");
     send(connection, {
       type: "hello",
       playerId: myPlayerId,
       name: getStoredPlayerName(),
+    });
+
+    scheduleJoinTimeout(WELCOME_TIMEOUT_MS, () => {
+      retryGuestJoin("Host did not respond — retrying…");
     });
   });
 
@@ -791,15 +850,17 @@ function setupHostConnection(connection) {
   });
 
   connection.on("close", () => {
-    if (!intentionalLeave) {
-      handleHostDisconnect();
+    if (intentionalLeave) return;
+    if (!connectedToHost) {
+      retryGuestJoin("Connection closed — retrying…");
+      return;
     }
+    handleHostDisconnect();
   });
 
   connection.on("error", () => {
     if (!connectedToHost && !intentionalLeave) {
-      clearJoinTimeout();
-      onNoHostFound();
+      retryGuestJoin("Connection failed — retrying…");
     }
   });
 }
@@ -1018,6 +1079,8 @@ function mergePlayerState(incoming) {
 function applyWelcome(msg) {
   connectedToHost = true;
   migrating = false;
+  guestJoinAttempts = 0;
+  clearJoinTimeout();
   clearReconnectTimeout();
 
   if (msg.migrating || migrating) {
