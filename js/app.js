@@ -57,6 +57,7 @@ let migrating = false;
 let hasJoinedOnce = false;
 let intentionalLeave = false;
 let sessionEnded = false;
+let hostRecentlyMigrated = false;
 const pendingRemovals = new Map();
 const PLAYER_RECONNECT_GRACE_MS = 2500;
 
@@ -161,12 +162,14 @@ function clearReconnectTimeout() {
   }
 }
 
-function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntentionalLeave = false } = {}) {
+function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntentionalLeave = false, preserveMigrating = false } = {}) {
   clearJoinTimeout();
   clearReconnectTimeout();
   if (!preserveIntentionalLeave) {
     intentionalLeave = false;
   }
+
+  const wasMigrating = migrating;
 
   for (const timeout of pendingRemovals.values()) {
     clearTimeout(timeout);
@@ -196,11 +199,16 @@ function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntent
   if (!keepPlayers) {
     players = {};
     nextJoinOrder = 1;
+    migrating = false;
+    hostRecentlyMigrated = false;
+  } else if (preserveMigrating) {
+    migrating = wasMigrating;
   }
 
   connectedToHost = false;
-  migrating = false;
-  keys.w = keys.a = keys.s = keys.d = false;
+  if (!keepPlayers) {
+    keys.w = keys.a = keys.s = keys.d = false;
+  }
 
   if (!keepMessages) {
     messages.innerHTML = "";
@@ -260,8 +268,19 @@ function onBecameHost() {
     nextJoinOrder = 1;
   } else {
     players[myPlayerId].name = "Host";
+    if (wasMigration) {
+      const orders = Object.values(players).map((p) => p.joinOrder ?? 0);
+      nextJoinOrder = Math.max(0, ...orders) + 1;
+    }
   }
   players[myPlayerId].isHost = true;
+
+  if (wasMigration) {
+    hostRecentlyMigrated = true;
+    setTimeout(() => {
+      hostRecentlyMigrated = false;
+    }, 30000);
+  }
 
   startGameLoop();
   enableChat();
@@ -442,7 +461,12 @@ function handleGuestHello(connection, playerId) {
   }
 
   connToPlayer.set(connection.peer, playerId);
-  send(connection, { type: "welcome", playerId, players: getPlayersSnapshot() });
+  send(connection, {
+    type: "welcome",
+    playerId,
+    players: getPlayersSnapshot(),
+    migrating: hostRecentlyMigrated && isReconnect,
+  });
 
   if (!isReconnect) {
     broadcast({ type: "player-joined", id: playerId, player: players[playerId] }, connection);
@@ -453,16 +477,56 @@ function handleGuestHello(connection, playerId) {
   updateConnectionStatus();
 }
 
+function copyPlayerFromSnapshot(p) {
+  const x = p.x ?? 0;
+  const y = p.y ?? 0;
+  return {
+    x,
+    y,
+    targetX: p.targetX ?? x,
+    targetY: p.targetY ?? y,
+    color: p.color,
+    name: p.name,
+    isHost: !!p.isHost,
+    joinOrder: p.joinOrder,
+  };
+}
+
+function mergePlayerState(incoming) {
+  for (const [id, incomingPlayer] of Object.entries(incoming)) {
+    const x = incomingPlayer.x ?? 0;
+    const y = incomingPlayer.y ?? 0;
+
+    if (!players[id]) {
+      players[id] = copyPlayerFromSnapshot(incomingPlayer);
+      continue;
+    }
+
+    const local = players[id];
+    local.name = incomingPlayer.name;
+    local.color = incomingPlayer.color;
+    local.isHost = !!incomingPlayer.isHost;
+    local.joinOrder = incomingPlayer.joinOrder;
+
+    if (id === myPlayerId) {
+      continue;
+    }
+
+    setPlayerPosition(local, x, y);
+  }
+}
+
 function applyWelcome(msg) {
   connectedToHost = true;
   migrating = false;
   clearReconnectTimeout();
 
-  for (const [id, p] of Object.entries(msg.players)) {
-    players[id] = { ...p };
-    if (p.targetX === undefined) {
-      players[id].targetX = p.x;
-      players[id].targetY = p.y;
+  if (msg.migrating || migrating) {
+    mergePlayerState(msg.players);
+  } else {
+    players = {};
+    for (const [id, p] of Object.entries(msg.players)) {
+      players[id] = copyPlayerFromSnapshot(p);
     }
   }
 
@@ -657,9 +721,15 @@ function handleHostDisconnect() {
 }
 
 function attemptHostMigration() {
-  destroyPeer({ keepPlayers: true, keepMessages: true });
+  const preservedPlayers = getPlayersSnapshot();
+  destroyPeer({ keepPlayers: true, keepMessages: true, preserveMigrating: true });
   migrating = true;
   setConnectionState("waiting", "Becoming host…");
+
+  players = {};
+  for (const [id, p] of Object.entries(preservedPlayers)) {
+    players[id] = copyPlayerFromSnapshot(p);
+  }
 
   removeHostPlayer();
   if (players[myPlayerId]) {
