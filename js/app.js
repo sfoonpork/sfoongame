@@ -27,6 +27,9 @@ const MULCH_SIZE = 14;
 const MULCH_COLOR = "#8B5A2B";
 const CLICK_EFFECT_DURATION_MS = 450;
 const CLICK_EFFECT_MAX_RADIUS = 14;
+const MAP_WIDTH = 3000;
+const MAP_HEIGHT = 3000;
+const DRAG_PAN_THRESHOLD = 8;
 
 const roleBadge = document.getElementById("role-badge");
 const connectionStatus = document.getElementById("connection-status");
@@ -69,6 +72,8 @@ const PLAYER_RECONNECT_GRACE_MS = 2500;
 const keys = { w: false, a: false, s: false, d: false };
 let moveTarget = null;
 let clickEffects = [];
+let camera = { x: 0, y: 0 };
+let pointerState = null;
 
 function getCanvasPoint(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
@@ -78,10 +83,39 @@ function getCanvasPoint(clientX, clientY) {
   };
 }
 
+function worldToScreen(x, y) {
+  return {
+    x: x - camera.x,
+    y: y - camera.y,
+  };
+}
+
+function screenToWorld(x, y) {
+  return {
+    x: x + camera.x,
+    y: y + camera.y,
+  };
+}
+
+function clampCameraPosition(x, y) {
+  const maxX = Math.max(0, MAP_WIDTH - canvas.width);
+  const maxY = Math.max(0, MAP_HEIGHT - canvas.height);
+  return {
+    x: Math.max(0, Math.min(maxX, x)),
+    y: Math.max(0, Math.min(maxY, y)),
+  };
+}
+
+function centerCameraOn(x, y) {
+  const next = clampCameraPosition(x - canvas.width / 2, y - canvas.height / 2);
+  camera.x = next.x;
+  camera.y = next.y;
+}
+
 function clampPlayerPosition(x, y) {
   return {
-    x: Math.max(PLAYER_HALF, Math.min(canvas.width - PLAYER_HALF, x)),
-    y: Math.max(PLAYER_HALF, Math.min(canvas.height - PLAYER_HALF, y)),
+    x: Math.max(PLAYER_HALF, Math.min(MAP_WIDTH - PLAYER_HALF, x)),
+    y: Math.max(PLAYER_HALF, Math.min(MAP_HEIGHT - PLAYER_HALF, y)),
   };
 }
 
@@ -103,6 +137,16 @@ function renderClickEffects(now) {
   const growEnd = 0.22;
 
   for (const effect of clickEffects) {
+    const screen = worldToScreen(effect.x, effect.y);
+    if (
+      screen.x < -CLICK_EFFECT_MAX_RADIUS ||
+      screen.y < -CLICK_EFFECT_MAX_RADIUS ||
+      screen.x > canvas.width + CLICK_EFFECT_MAX_RADIUS ||
+      screen.y > canvas.height + CLICK_EFFECT_MAX_RADIUS
+    ) {
+      continue;
+    }
+
     const t = Math.min(1, (now - effect.startTime) / CLICK_EFFECT_DURATION_MS);
     let radius;
     let alpha;
@@ -120,7 +164,7 @@ function renderClickEffects(now) {
     }
 
     ctx.beginPath();
-    ctx.arc(effect.x, effect.y, Math.max(0, radius), 0, Math.PI * 2);
+    ctx.arc(screen.x, screen.y, Math.max(0, radius), 0, Math.PI * 2);
     ctx.fillStyle = `rgba(59, 130, 246, ${alpha * 0.35})`;
     ctx.fill();
     ctx.strokeStyle = `rgba(232, 237, 244, ${alpha})`;
@@ -209,14 +253,15 @@ function drawPlayer(id, p) {
   const { w, h } = spriteSize;
   const isLocal = id === myPlayerId;
   let labelOffset = PLAYER_HALF + 4;
+  const screen = worldToScreen(p.x, p.y);
 
   if (!spriteReady || !spriteMask) {
     ctx.beginPath();
-    ctx.arc(p.x, p.y, PLAYER_HALF * 0.35, 0, Math.PI * 2);
+    ctx.arc(screen.x, screen.y, PLAYER_HALF * 0.35, 0, Math.PI * 2);
     ctx.fillStyle = "#e8edf4";
     ctx.fill();
   } else {
-    ctx.drawImage(spriteMask, p.x - w / 2, p.y - h / 2);
+    ctx.drawImage(spriteMask, screen.x - w / 2, screen.y - h / 2);
     labelOffset = h / 2 + 4;
   }
 
@@ -225,7 +270,7 @@ function drawPlayer(id, p) {
     ? "bold 11px Segoe UI, system-ui, sans-serif"
     : "11px Segoe UI, system-ui, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(isLocal ? `${p.name} (you)` : p.name, p.x, p.y - labelOffset);
+  ctx.fillText(isLocal ? `${p.name} (you)` : p.name, screen.x, screen.y - labelOffset);
 }
 
 function assignPlayerName() {
@@ -375,6 +420,9 @@ function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   canvas.width = rect.width;
   canvas.height = rect.height;
+  const next = clampCameraPosition(camera.x, camera.y);
+  camera.x = next.x;
+  camera.y = next.y;
 }
 
 function clearJoinTimeout() {
@@ -442,6 +490,8 @@ function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntent
     keys.w = keys.a = keys.s = keys.d = false;
     moveTarget = null;
     clickEffects = [];
+    pointerState = null;
+    camera = { x: 0, y: 0 };
   }
 
   if (!keepMessages) {
@@ -502,6 +552,7 @@ function onBecameHost() {
     nextJoinOrder = 1;
   }
   players[myPlayerId].isHost = true;
+  centerCameraOn(players[myPlayerId].x, players[myPlayerId].y);
 
   if (wasMigration) {
     hostRecentlyMigrated = true;
@@ -816,6 +867,7 @@ function applyWelcome(msg) {
       joinOrder: nextJoinOrder++,
     };
   }
+  centerCameraOn(players[myPlayerId].x, players[myPlayerId].y);
 
   if (msg.mulch) {
     applyMulchSnapshot(msg.mulch);
@@ -1153,8 +1205,8 @@ function clearRandomMulchSpawn() {
 
 function spawnMulch() {
   const padding = MULCH_SIZE / 2 + PLAYER_HALF;
-  const maxX = canvas.width - padding;
-  const maxY = canvas.height - padding;
+  const maxX = MAP_WIDTH - padding;
+  const maxY = MAP_HEIGHT - padding;
   if (maxX <= padding || maxY <= padding) return;
 
   const piece = {
@@ -1313,13 +1365,15 @@ function render(now = performance.now()) {
   ctx.strokeStyle = "#2d3f56";
   ctx.lineWidth = 1;
   const gridSize = 40;
-  for (let x = 0; x < canvas.width; x += gridSize) {
+  const startX = -((camera.x % gridSize) + gridSize) % gridSize;
+  const startY = -((camera.y % gridSize) + gridSize) % gridSize;
+  for (let x = startX; x < canvas.width; x += gridSize) {
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, canvas.height);
     ctx.stroke();
   }
-  for (let y = 0; y < canvas.height; y += gridSize) {
+  for (let y = startY; y < canvas.height; y += gridSize) {
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(canvas.width, y);
@@ -1329,10 +1383,19 @@ function render(now = performance.now()) {
   renderClickEffects(now);
 
   for (const piece of mulchPieces) {
+    const screen = worldToScreen(piece.x, piece.y);
+    if (
+      screen.x < -MULCH_SIZE ||
+      screen.y < -MULCH_SIZE ||
+      screen.x > canvas.width + MULCH_SIZE ||
+      screen.y > canvas.height + MULCH_SIZE
+    ) {
+      continue;
+    }
     ctx.fillStyle = MULCH_COLOR;
     ctx.fillRect(
-      piece.x - MULCH_SIZE / 2,
-      piece.y - MULCH_SIZE / 2,
+      screen.x - MULCH_SIZE / 2,
+      screen.y - MULCH_SIZE / 2,
       MULCH_SIZE,
       MULCH_SIZE,
     );
@@ -1357,10 +1420,54 @@ canvas.addEventListener("pointerdown", (e) => {
   if (e.pointerType === "mouse" && e.button !== 0) return;
 
   const point = getCanvasPoint(e.clientX, e.clientY);
-  const clamped = clampPlayerPosition(point.x, point.y);
-  moveTarget = clamped;
-  spawnClickEffect(clamped.x, clamped.y);
+  pointerState = {
+    pointerId: e.pointerId,
+    startX: point.x,
+    startY: point.y,
+    startCameraX: camera.x,
+    startCameraY: camera.y,
+    dragging: false,
+  };
+  canvas.setPointerCapture(e.pointerId);
 });
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!pointerState || pointerState.pointerId !== e.pointerId) return;
+  const point = getCanvasPoint(e.clientX, e.clientY);
+  const dx = point.x - pointerState.startX;
+  const dy = point.y - pointerState.startY;
+
+  if (!pointerState.dragging && Math.hypot(dx, dy) >= DRAG_PAN_THRESHOLD) {
+    pointerState.dragging = true;
+    moveTarget = null;
+  }
+  if (!pointerState.dragging) return;
+
+  const next = clampCameraPosition(
+    pointerState.startCameraX - dx,
+    pointerState.startCameraY - dy,
+  );
+  camera.x = next.x;
+  camera.y = next.y;
+});
+
+function finishPointerInteraction(e) {
+  if (!pointerState || pointerState.pointerId !== e.pointerId) return;
+  const point = getCanvasPoint(e.clientX, e.clientY);
+  if (!pointerState.dragging && myPlayerId && !isChatFocused()) {
+    const world = screenToWorld(point.x, point.y);
+    const clamped = clampPlayerPosition(world.x, world.y);
+    moveTarget = clamped;
+    spawnClickEffect(clamped.x, clamped.y);
+  }
+  pointerState = null;
+  if (canvas.hasPointerCapture(e.pointerId)) {
+    canvas.releasePointerCapture(e.pointerId);
+  }
+}
+
+canvas.addEventListener("pointerup", finishPointerInteraction);
+canvas.addEventListener("pointercancel", finishPointerInteraction);
 
 window.addEventListener("keydown", (e) => {
   if (!myPlayerId || isChatFocused()) return;
