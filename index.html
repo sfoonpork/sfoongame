@@ -1,4 +1,16 @@
 <!DOCTYPE html>
+<!--
+  Pibb Game — static multiplayer browser game
+  ==========================================
+  Architecture:
+    - Single-page app (no build step)
+    - PeerJS (WebRTC) for P2P networking — see js/app.js
+    - Canvas for world rendering; DOM for chat, leaderboard, and controls
+
+  Layout (left → right):
+    game-area: header bar + canvas + overlay leaderboard
+    chat-sidebar: messages, player count, leave button
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -6,15 +18,19 @@
   <title>Pibb Game</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
+<!-- body.in-room: full-viewport game layout (see style.css) -->
 <body class="in-room">
   <main class="container" id="main">
     <section id="room" class="room-layout">
+      <!-- ── Game column ───────────────────────────────────────────── -->
       <div class="game-area">
+        <!-- Top bar: role badge, editable name, connection status, controls hint -->
         <div class="game-header">
           <div class="room-info">
             <span class="badge" id="role-badge">…</span>
             <h2>Pibb Game</h2>
           </div>
+          <!-- Live-editable display name; synced over network in app.js -->
           <label class="player-name-field" for="player-name-input">
             <span class="player-name-label">Name</span>
             <input
@@ -30,15 +46,19 @@
           <p id="connection-status" class="connection waiting">Connecting…</p>
           <p class="controls-hint">WASD/click move, drag to pan</p>
         </div>
+
+        <!-- Canvas fills remaining space; leaderboard floats on top (pointer-events: none) -->
         <div class="game-body">
           <canvas id="game-canvas"></canvas>
           <aside class="leaderboard" id="leaderboard" aria-label="Mulch leaderboard">
             <h3 class="leaderboard-title">Mulch</h3>
+            <!-- Populated by updateLeaderboard() in app.js -->
             <ol class="leaderboard-list" id="leaderboard-list"></ol>
           </aside>
         </div>
       </div>
 
+      <!-- ── Chat column ───────────────────────────────────────────── -->
       <aside class="chat-sidebar">
         <div class="chat-sidebar-header">
           <h3>Chat</h3>
@@ -54,7 +74,9 @@
     </section>
   </main>
 
+  <!-- PeerJS: WebRTC signaling + data channels (vendored) -->
   <script src="js/peerjs.min.js"></script>
+  <!-- All game logic, networking, and rendering -->
   <script src="js/app.js"></script>
 </body>
 </html>

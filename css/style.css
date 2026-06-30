@@ -1,3 +1,15 @@
+/*
+  Pibb Game — stylesheet
+  ======================
+  Design tokens live in :root. Layout is a horizontal split:
+    [ game-area (flex 1) | chat-sidebar (fixed width) ]
+
+  Legacy lobby styles (.tabs, .card, etc.) remain for potential reuse;
+  the live app skips the lobby and uses body.in-room immediately.
+*/
+
+/* ── Reset ─────────────────────────────────────────────────────────── */
+
 *,
 *::before,
 *::after {
@@ -5,6 +17,8 @@
   margin: 0;
   padding: 0;
 }
+
+/* ── Design tokens ─────────────────────────────────────────────────── */
 
 :root {
   --bg: #0f1419;
@@ -23,6 +37,8 @@
   --chat-width: 320px;
 }
 
+/* ── Base page ─────────────────────────────────────────────────────── */
+
 body {
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   background: var(--bg);
@@ -34,6 +50,7 @@ body {
   line-height: 1.5;
 }
 
+/* Full-viewport mode while in-game (no page scroll) */
 body.in-room {
   overflow: hidden;
 }
@@ -50,6 +67,8 @@ body.in-room .container {
   padding: 0;
   height: 100vh;
 }
+
+/* ── Legacy lobby components (unused in auto-join flow) ────────────── */
 
 .header {
   text-align: center;
@@ -160,6 +179,8 @@ input[type="text"]::placeholder {
   margin: 0.4rem 0 1rem;
 }
 
+/* ── Shared button styles ──────────────────────────────────────────── */
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -225,7 +246,7 @@ input[type="text"]::placeholder {
   color: var(--success);
 }
 
-/* Room layout: game + side chat */
+/* ── In-game layout: game canvas + chat sidebar ────────────────────── */
 
 .room-layout {
   display: flex;
@@ -297,6 +318,7 @@ input[type="text"]::placeholder {
   opacity: 0.45;
 }
 
+/* Host vs guest role indicator */
 .badge {
   font-size: 0.7rem;
   font-weight: 700;
@@ -312,6 +334,7 @@ input[type="text"]::placeholder {
   background: var(--success);
 }
 
+/* Connection state colors (waiting / connected / disconnected) */
 .connection {
   font-size: 0.8rem;
 }
@@ -334,6 +357,7 @@ input[type="text"]::placeholder {
   color: var(--text-muted);
 }
 
+/* Canvas container; leaderboard is absolutely positioned inside */
 .game-body {
   position: relative;
   flex: 1;
@@ -347,9 +371,10 @@ input[type="text"]::placeholder {
   width: 100%;
   height: 100%;
   cursor: crosshair;
-  touch-action: none;
+  touch-action: none; /* Prevent browser scroll/zoom on touch; app handles pinch */
 }
 
+/* Overlay leaderboard — does not block canvas pointer events */
 .leaderboard {
   position: absolute;
   top: 0.75rem;
@@ -423,6 +448,8 @@ input[type="text"]::placeholder {
   padding: 0.15rem 0;
 }
 
+/* ── Chat sidebar ──────────────────────────────────────────────────── */
+
 .chat-sidebar {
   width: var(--chat-width);
   flex-shrink: 0;
@@ -465,6 +492,7 @@ input[type="text"]::placeholder {
   gap: 0.5rem;
 }
 
+/* Chat bubble variants: local (you), remote, system (italic center) */
 .message {
   font-size: 0.9rem;
   padding: 0.4rem 0.6rem;
@@ -506,6 +534,8 @@ input[type="text"]::placeholder {
   font-size: 0.95rem;
   font-family: inherit;
 }
+
+/* ── Mobile: stack game above chat ─────────────────────────────────── */
 
 @media (max-width: 640px) {
   .room-layout {

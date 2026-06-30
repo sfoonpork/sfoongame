@@ -1,5 +1,32 @@
+/**
+ * Pibb Game — client application
+ * ==============================
+ *
+ * A browser-based multiplayer game using PeerJS (WebRTC data channels).
+ * No backend server: one player hosts, others connect as guests. The host
+ * relays all messages (star topology).
+ *
+ * SYSTEMS OVERVIEW
+ * ----------------
+ * 1. Networking   — PeerJS, host/guest roles, message protocol, host migration
+ * 2. World        — 3000×3000 map, camera pan/zoom, coordinate transforms
+ * 3. Players      — WASD + click-to-move, remote smoothing, name sync
+ * 4. Mulch        — Host-spawned pickups, collision, leaderboard scoring
+ * 5. Rendering    — Canvas 2D loop, pibble sprites, grid, click ripples
+ * 6. Input        — Keyboard, pointer drag-pan, pinch/wheel zoom
+ * 7. UI           — Chat sidebar, connection status, editable display name
+ *
+ * BOOTSTRAP: connect() runs at file bottom on page load (auto-join).
+ */
+
+/* ==========================================================================
+   CONFIGURATION — tunable constants grouped by subsystem
+   ========================================================================== */
+
+/** Fixed PeerJS ID for the lobby host. First client to claim it becomes host. */
 const LOBBY_PEER_ID = "SFOONGAME";
 
+/** PeerJS signaling server (public PeerJS cloud). */
 const PEER_CONFIG = {
   host: "0.peerjs.com",
   port: 443,
@@ -7,32 +34,47 @@ const PEER_CONFIG = {
   secure: true,
 };
 
+// Connection & session
 const JOIN_TIMEOUT_MS = 12000;
 const MAX_PLAYERS = 8;
+const HOST_MIGRATION_DELAY_MS = 500;   // Successor claims host quickly
+const GUEST_RECONNECT_DELAY_MS = 2500; // Guests wait for new host to settle
+const RECONNECT_RETRY_MS = 3000;
+
+// Movement — hitbox (collision) is smaller than draw size (sprite)
 const MOVE_SPEED = 4;
 const PLAYER_HITBOX_SIZE = 52;
 const PLAYER_DRAW_SIZE = 84;
 const PLAYER_HALF = PLAYER_HITBOX_SIZE / 2;
-const MOVE_SEND_INTERVAL_MS = 50;
-const MOVEMENT_SMOOTHING = 14;
-const HOST_MIGRATION_DELAY_MS = 500;
-const GUEST_RECONNECT_DELAY_MS = 2500;
-const RECONNECT_RETRY_MS = 3000;
+const MOVE_SEND_INTERVAL_MS = 50;      // Throttle network move updates
+const MOVEMENT_SMOOTHING = 14;         // Exponential lerp factor for remote players
+
+// Player identity
 const MAX_PLAYER_NAME_LENGTH = 24;
 const RENAME_DEBOUNCE_MS = 100;
+
+// Mulch pickups (host-authoritative)
 const MULCH_SPAWN_INTERVAL_MS = 5000;
 const MULCH_RANDOM_MIN_MS = 1000;
 const MULCH_RANDOM_MAX_MS = 10000;
 const MULCH_SIZE = 14;
 const MULCH_COLOR = "#8B5A2B";
+
+// Visual feedback for click-to-move
 const CLICK_EFFECT_DURATION_MS = 450;
 const CLICK_EFFECT_MAX_RADIUS = 14;
+
+// World bounds and camera
 const MAP_WIDTH = 3000;
 const MAP_HEIGHT = 3000;
-const DRAG_PAN_THRESHOLD = 8;
+const DRAG_PAN_THRESHOLD = 8;  // Pixels before pointer-down becomes pan drag
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 2.5;
 const WHEEL_ZOOM_FACTOR = 0.0015;
+
+/* ==========================================================================
+   DOM REFERENCES — elements from index.html
+   ========================================================================== */
 
 const roleBadge = document.getElementById("role-badge");
 const connectionStatus = document.getElementById("connection-status");
@@ -46,41 +88,62 @@ const leaveBtn = document.getElementById("leave-btn");
 const canvas = document.getElementById("game-canvas");
 const ctx = canvas.getContext("2d");
 
-let peer = null;
-let hostConn = null;
-let connections = new Map();
-let connToPlayer = new Map();
-let role = null;
+/* ==========================================================================
+   APPLICATION STATE
+   ========================================================================== */
+
+// --- PeerJS / networking ---
+let peer = null;              // Local PeerJS instance
+let hostConn = null;          // Guest → host data connection
+let connections = new Map();  // Host only: peerId → DataConnection
+let connToPlayer = new Map(); // Host only: peerId → stable playerId (UUID)
+let role = null;              // "host" | "guest"
 let joinTimeout = null;
 let reconnectTimeout = null;
-let myPlayerId = null;
-let players = {};
-let mulchPieces = [];
+
+// --- Player & game world ---
+let myPlayerId = null;        // Stable UUID in sessionStorage (survives refresh)
+let players = {};             // playerId → { x, y, targetX, targetY, name, mulch, isHost, joinOrder }
+let mulchPieces = [];         // { id, x, y } — synced from host
 let mulchSpawnInterval = null;
 let mulchRandomTimeout = null;
-let nextJoinOrder = 1;
+let nextJoinOrder = 1;        // Host assigns join order for migration election
+
+// --- Render loop ---
 let animationId = null;
 let lastFrameTime = 0;
 let lastMoveSent = 0;
 let lastSentPos = { x: 0, y: 0 };
+
+// --- Session flags ---
 let connectedToHost = false;
-let migrating = false;
-let hasJoinedOnce = false;
-let intentionalLeave = false;
+let migrating = false;            // Host disconnect in progress
+let hasJoinedOnce = false;        // Suppress duplicate welcome messages
+let intentionalLeave = false;     // User clicked Leave (don't auto-reconnect)
 let sessionEnded = false;
-let hostRecentlyMigrated = false;
+let hostRecentlyMigrated = false; // Tell reconnecting guests to merge state
+
+// Grace period before removing a disconnected player (allows tab refresh)
 const pendingRemovals = new Map();
 const PLAYER_RECONNECT_GRACE_MS = 2500;
 
+// --- Input state ---
 const keys = { w: false, a: false, s: false, d: false };
-let moveTarget = null;
-let clickEffects = [];
-let camera = { x: 0, y: 0 };
-let pointerState = null;
+let moveTarget = null;            // World coords for click-to-move
+let clickEffects = [];            // Ripple animations at click points
+let camera = { x: 0, y: 0 };      // Top-left of visible world region
+let pointerState = null;          // Active single-pointer interaction
 let zoom = 1;
-const activePointers = new Map();
+const activePointers = new Map(); // All touch/mouse pointers (for pinch)
 let pinchState = null;
 
+/* ==========================================================================
+   CAMERA & COORDINATE SYSTEM
+   World space: 0..MAP_WIDTH × 0..MAP_HEIGHT. Camera is top-left corner.
+   Screen space: canvas pixels. Zoom scales world→screen.
+   ========================================================================== */
+
+/** Convert browser client coords to canvas pixel coords (handles CSS scaling). */
 function getCanvasPoint(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   return {
@@ -90,6 +153,7 @@ function getCanvasPoint(clientX, clientY) {
 }
 
 function worldToScreen(x, y) {
+  // Subtract camera offset, then scale by zoom
   return {
     x: (x - camera.x) * zoom,
     y: (y - camera.y) * zoom,
@@ -97,6 +161,7 @@ function worldToScreen(x, y) {
 }
 
 function screenToWorld(x, y) {
+  // Inverse of worldToScreen
   return {
     x: x / zoom + camera.x,
     y: y / zoom + camera.y,
@@ -124,6 +189,7 @@ function centerCameraOn(x, y) {
 }
 
 function setZoomAtPoint(nextZoom, screenX, screenY) {
+  // Keep the world point under the cursor fixed while zoom changes
   const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
   if (Math.abs(clampedZoom - zoom) < 0.0001) return;
   const worldBefore = screenToWorld(screenX, screenY);
@@ -136,12 +202,17 @@ function setZoomAtPoint(nextZoom, screenX, screenY) {
   camera.y = nextCamera.y;
 }
 
+/** Keep player center inside world bounds (uses hitbox half-size). */
 function clampPlayerPosition(x, y) {
   return {
     x: Math.max(PLAYER_HALF, Math.min(MAP_WIDTH - PLAYER_HALF, x)),
     y: Math.max(PLAYER_HALF, Math.min(MAP_HEIGHT - PLAYER_HALF, y)),
   };
 }
+
+/* ==========================================================================
+   CLICK EFFECTS — visual ripple when player sets a move target
+   ========================================================================== */
 
 function spawnClickEffect(x, y) {
   clickEffects.push({
@@ -197,6 +268,10 @@ function renderClickEffects(now) {
   }
 }
 
+/**
+ * After local movement, sync target and throttle move messages to network.
+ * Host broadcasts directly; guests send to host for relay.
+ */
 function syncLocalPosition(p) {
   p.targetX = p.x;
   p.targetY = p.y;
@@ -212,6 +287,11 @@ function syncLocalPosition(p) {
     }
   }
 }
+
+/* ==========================================================================
+   SPRITES & AUDIO
+   pibble.png is processed at load: near-black pixels become transparent.
+   ========================================================================== */
 
 const pibbleSprite = new Image();
 let spriteReady = false;
@@ -251,6 +331,7 @@ function getSpriteDimensions() {
   };
 }
 
+/** Pre-render sprite with black background pixels made transparent. */
 function buildSpriteMask() {
   const { w, h } = getSpriteDimensions();
   const off = document.createElement("canvas");
@@ -273,6 +354,7 @@ function buildSpriteMask() {
   return off;
 }
 
+/** Draw one player: pibble sprite (or fallback dot) + name label above. */
 function drawPlayer(id, p) {
   const { w, h } = spriteSize;
   const drawW = w * zoom;
@@ -299,6 +381,10 @@ function drawPlayer(id, p) {
   ctx.textAlign = "center";
   ctx.fillText(isLocal ? `${p.name} (you)` : p.name, screen.x, screen.y - labelOffset);
 }
+
+/* ==========================================================================
+   PLAYER NAMES — auto-assign, sanitize, persist, and sync over network
+   ========================================================================== */
 
 function assignPlayerName() {
   const usedNumbers = new Set();
@@ -357,6 +443,7 @@ function applyRename(id, name, fromConn) {
   }
 }
 
+/** Debounced rename broadcast while user types in the header input. */
 function sendRename(name) {
   if (!myPlayerId || !players[myPlayerId]) return;
 
@@ -374,6 +461,10 @@ function sendRename(name) {
     }
   }, RENAME_DEBOUNCE_MS);
 }
+
+/* ==========================================================================
+   RECONNECT GRACE — delay player removal so tab refresh can reconnect
+   ========================================================================== */
 
 function cancelPendingRemoval(playerId) {
   const timeout = pendingRemovals.get(playerId);
@@ -400,6 +491,7 @@ function schedulePendingRemoval(playerId) {
   );
 }
 
+/** Close duplicate connections when same playerId reconnects. */
 function detachConnectionsForPlayer(playerId, exceptPeerId) {
   for (const [peerId, mappedId] of [...connToPlayer.entries()]) {
     if (mappedId === playerId && peerId !== exceptPeerId) {
@@ -415,6 +507,7 @@ function isPlayerConnected(playerId) {
   return [...connToPlayer.values()].includes(playerId);
 }
 
+/** Stable player identity across page reloads (distinct from PeerJS peer ID). */
 function getOrCreatePlayerId() {
   let id = sessionStorage.getItem("playerId");
   if (!id) {
@@ -424,12 +517,17 @@ function getOrCreatePlayerId() {
   return id;
 }
 
+/* ==========================================================================
+   MESSAGING PRIMITIVES — JSON over PeerJS data channels
+   ========================================================================== */
+
 function send(conn, msg) {
   if (conn && conn.open) {
     conn.send(JSON.stringify(msg));
   }
 }
 
+/** Host relays to all guests except optional excluded connection. */
 function broadcast(msg, excludeConn) {
   const data = JSON.stringify(msg);
   for (const conn of connections.values()) {
@@ -438,6 +536,10 @@ function broadcast(msg, excludeConn) {
     }
   }
 }
+
+/* ==========================================================================
+   CANVAS LIFECYCLE
+   ========================================================================== */
 
 function getCanvasCenter() {
   return { x: canvas.width / 2, y: canvas.height / 2 };
@@ -466,6 +568,10 @@ function clearReconnectTimeout() {
   }
 }
 
+/**
+ * Tear down PeerJS, connections, timers, and optionally game state.
+ * Used on leave, reconnect, and host migration.
+ */
 function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntentionalLeave = false, preserveMigrating = false } = {}) {
   clearJoinTimeout();
   clearReconnectTimeout();
@@ -526,6 +632,11 @@ function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntent
   }
 }
 
+/* ==========================================================================
+   CONNECTION FLOW — auto-join on load: try host first, else guest
+   ========================================================================== */
+
+/** Entry point: load player ID, resize canvas, attempt to claim host role. */
 function connect() {
   sessionEnded = false;
   myPlayerId = getOrCreatePlayerId();
@@ -537,6 +648,10 @@ function connect() {
   attemptClaimHost();
 }
 
+/**
+ * Try to become host by opening Peer with fixed LOBBY_PEER_ID.
+ * If ID is taken (unavailable-id), fall back to guest join.
+ */
 function attemptClaimHost() {
   role = "host";
   updateRoleBadge();
@@ -568,6 +683,7 @@ function attemptClaimHost() {
   });
 }
 
+/** Host is live: spawn self if needed, start mulch + game loop, enable UI. */
 function onBecameHost() {
   const wasMigration = migrating;
   migrating = false;
@@ -608,6 +724,7 @@ function onBecameHost() {
   }
 }
 
+/** Open anonymous Peer, connect to LOBBY_PEER_ID, send hello with playerId. */
 function attemptJoinAsGuest() {
   role = "guest";
   updateRoleBadge();
@@ -633,6 +750,7 @@ function attemptJoinAsGuest() {
   });
 }
 
+/** No host answered within JOIN_TIMEOUT_MS — become the host ourselves. */
 function onNoHostFound() {
   clearJoinTimeout();
   destroyPeer({ keepPlayers: true, keepMessages: true });
@@ -640,6 +758,7 @@ function onNoHostFound() {
   attemptClaimHost();
 }
 
+/** Host side: wire incoming guest data connection. */
 function setupGuestConnection(connection) {
   connections.set(connection.peer, connection);
 
@@ -656,6 +775,7 @@ function setupGuestConnection(connection) {
   });
 }
 
+/** Guest side: wire outgoing connection to host; send hello on open. */
 function setupHostConnection(connection) {
   connection.on("open", () => {
     clearJoinTimeout();
@@ -684,6 +804,12 @@ function setupHostConnection(connection) {
   });
 }
 
+/* ==========================================================================
+   MESSAGE PROTOCOL — central dispatcher for all network message types
+   Types: hello, welcome, move, chat, rename, player-joined, player-left,
+          leave, mulch-spawn, mulch-collect, error
+   ========================================================================== */
+
 function handleMessage(data, fromConn) {
   let msg;
   try {
@@ -694,11 +820,13 @@ function handleMessage(data, fromConn) {
   }
 
   switch (msg.type) {
+    // Guest → Host: initial handshake with stable playerId + display name
     case "hello":
       if (role !== "host" || !fromConn) break;
       handleGuestHello(fromConn, msg.playerId, msg.name);
       break;
 
+    // Host → Guest: full state snapshot after hello
     case "welcome":
       if (role !== "guest") break;
       applyWelcome(msg);
@@ -712,6 +840,7 @@ function handleMessage(data, fromConn) {
       }
       break;
 
+    // Host relays chat to all guests; guests display incoming directly
     case "chat":
       if (role === "host" && fromConn) {
         addChatMessage(msg.text, false, msg.from);
@@ -721,6 +850,7 @@ function handleMessage(data, fromConn) {
       }
       break;
 
+    // Position sync: host applies + relays; also checks mulch on each move (tab-focus fix)
     case "move":
       if (role === "host") {
         applyMove(msg.id, msg.x, msg.y);
@@ -731,6 +861,7 @@ function handleMessage(data, fromConn) {
       }
       break;
 
+    // New player entered (broadcast by host after hello)
     case "player-joined":
       players[msg.id] = { ...msg.player };
       if (players[msg.id].targetX === undefined) {
@@ -742,6 +873,7 @@ function handleMessage(data, fromConn) {
       updateLeaderboard();
       break;
 
+    // Player removed after disconnect grace period or explicit leave
     case "player-left":
       if (players[msg.id]) {
         addSystemMessage(`${players[msg.id].name} left.`);
@@ -749,6 +881,7 @@ function handleMessage(data, fromConn) {
       }
       break;
 
+    // Display name change — host relays to other guests
     case "rename":
       if (role === "host" && fromConn) {
         applyRename(msg.id, msg.name, fromConn);
@@ -757,12 +890,14 @@ function handleMessage(data, fromConn) {
       }
       break;
 
+    // Host spawns mulch; all clients add piece to local array
     case "mulch-spawn":
       if (!mulchPieces.some((m) => m.id === msg.piece.id)) {
         mulchPieces.push({ ...msg.piece });
       }
       break;
 
+    // Host collected mulch; remove piece, update score, play sound
     case "mulch-collect":
       mulchPieces = mulchPieces.filter((m) => m.id !== msg.mulchId);
       if (players[msg.playerId]) {
@@ -772,6 +907,7 @@ function handleMessage(data, fromConn) {
       updateLeaderboard();
       break;
 
+    // Explicit leave (tab close or Leave button) — immediate removal on host
     case "leave":
       if (role === "host" && fromConn) {
         const playerId = msg.playerId || connToPlayer.get(fromConn.peer);
@@ -784,6 +920,10 @@ function handleMessage(data, fromConn) {
   }
 }
 
+/**
+ * Host handles new guest connection: spawn or reconnect player,
+ * send welcome snapshot (players + mulch), broadcast player-joined.
+ */
 function handleGuestHello(connection, playerId, preferredName) {
   cancelPendingRemoval(playerId);
 
@@ -820,6 +960,10 @@ function handleGuestHello(connection, playerId, preferredName) {
   updateLeaderboard();
 }
 
+/* ==========================================================================
+   PLAYER STATE SYNC — snapshots, welcome, merge on host migration
+   ========================================================================== */
+
 function getMulchSnapshot() {
   return mulchPieces.map((m) => ({ id: m.id, x: m.x, y: m.y }));
 }
@@ -844,6 +988,7 @@ function copyPlayerFromSnapshot(p) {
   };
 }
 
+/** Merge incoming snapshot into local state (preserves positions on migration). */
 function mergePlayerState(incoming) {
   for (const [id, incomingPlayer] of Object.entries(incoming)) {
     const x = incomingPlayer.x ?? 0;
@@ -869,6 +1014,7 @@ function mergePlayerState(incoming) {
   }
 }
 
+/** Guest receives full game state from host after hello. */
 function applyWelcome(msg) {
   connectedToHost = true;
   migrating = false;
@@ -954,6 +1100,7 @@ function applyMove(id, x, y) {
   }
 }
 
+/** Serializable player state for welcome / migration (uses target position). */
 function getPlayersSnapshot() {
   const snapshot = {};
   for (const [id, p] of Object.entries(players)) {
@@ -969,6 +1116,7 @@ function getPlayersSnapshot() {
   return snapshot;
 }
 
+/** Lowest joinOrder wins host election when current host disconnects. */
 function findSuccessor() {
   let successor = myPlayerId;
   let bestOrder = players[myPlayerId]?.joinOrder ?? Infinity;
@@ -991,6 +1139,10 @@ function removeHostPlayer() {
     delete players[hostId].isHost;
   }
 }
+
+/* ==========================================================================
+   DISCONNECT & LEAVE — graceful teardown and host migration
+   ========================================================================== */
 
 function removeConnectedPlayer(playerId, connection, { immediate = false } = {}) {
   if (connection) {
@@ -1023,6 +1175,7 @@ function handleGuestDisconnect(connection) {
   removeConnectedPlayer(connToPlayer.get(connection.peer), connection);
 }
 
+/** Best-effort leave message on tab close (pagehide). */
 function notifyLeave() {
   if (!myPlayerId) return;
   const msg = { type: "leave", playerId: myPlayerId };
@@ -1037,6 +1190,10 @@ function notifyLeave() {
   }
 }
 
+/**
+ * Leave session: notify peers, destroy connections.
+ * reconnect=true (Leave button) clears hasJoinedOnce and re-connects.
+ */
 function leaveSession({ reconnect = false } = {}) {
   if (sessionEnded) return;
 
@@ -1058,6 +1215,10 @@ function leaveSession({ reconnect = false } = {}) {
   }
 }
 
+/**
+ * Guest path when host drops: elect successor, staggered reconnect delays.
+ * Successor becomes new host; others rejoin as guests.
+ */
 function handleHostDisconnect() {
   if (role !== "guest" || migrating || intentionalLeave) return;
 
@@ -1083,6 +1244,7 @@ function handleHostDisconnect() {
   }, delay);
 }
 
+/** Elected guest preserves state, destroys peer, re-claims LOBBY_PEER_ID. */
 function attemptHostMigration() {
   const preservedPlayers = getPlayersSnapshot();
   const preservedMulch = getMulchSnapshot();
@@ -1117,6 +1279,10 @@ function scheduleReconnect(message, delay = RECONNECT_RETRY_MS) {
   clearReconnectTimeout();
   reconnectTimeout = setTimeout(connect, delay);
 }
+
+/* ==========================================================================
+   UI UPDATES — connection badge, chat enable, leaderboard DOM
+   ========================================================================== */
 
 function updateConnectionStatus() {
   if (role !== "host") return;
@@ -1185,6 +1351,11 @@ function updateLeaderboard() {
     .join("");
 }
 
+/* ==========================================================================
+   MULCH SYSTEM — host spawns, detects collisions, broadcasts collection
+   Guests also check collisions on move messages (background-tab fix).
+   ========================================================================== */
+
 function startMulchSpawning() {
   if (role !== "host") return;
 
@@ -1231,6 +1402,7 @@ function clearRandomMulchSpawn() {
   }
 }
 
+/** Host-only: spawn at random world position and broadcast mulch-spawn. */
 function spawnMulch() {
   const padding = MULCH_SIZE / 2 + PLAYER_HALF;
   const maxX = MAP_WIDTH - padding;
@@ -1284,6 +1456,7 @@ function checkMulchCollisionsForPlayer(playerId) {
   }
 }
 
+/** Authoritative collection on host; guests learn via mulch-collect message. */
 function collectMulch(playerId, mulchId) {
   const pieceIndex = mulchPieces.findIndex((m) => m.id === mulchId);
   if (pieceIndex === -1 || !players[playerId]) return;
@@ -1301,6 +1474,10 @@ function collectMulch(playerId, mulchId) {
 
   updateLeaderboard();
 }
+
+/* ==========================================================================
+   CHAT UI — system messages and player chat bubbles
+   ========================================================================== */
 
 function addSystemMessage(text) {
   const el = document.createElement("div");
@@ -1322,6 +1499,10 @@ function addChatMessage(text, isLocal, fromName) {
   messages.scrollTop = messages.scrollHeight;
 }
 
+/* ==========================================================================
+   GAME LOOP — requestAnimationFrame: update → collide → render
+   ========================================================================== */
+
 function startGameLoop() {
   if (animationId) return;
   lastFrameTime = performance.now();
@@ -1340,6 +1521,7 @@ function startGameLoop() {
   animationId = requestAnimationFrame(loop);
 }
 
+/** Exponential smoothing: remote players lerp toward last known target. */
 function updateRemotePlayers(dt) {
   const t = 1 - Math.exp(-MOVEMENT_SMOOTHING * dt);
   for (const [id, p] of Object.entries(players)) {
@@ -1357,6 +1539,7 @@ function stopGameLoop() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
+/** WASD takes priority over click target; clamp to map and send moves. */
 function updateLocalPlayer() {
   if (!myPlayerId || !players[myPlayerId]) return;
 
@@ -1407,6 +1590,7 @@ function sendMove(x, y) {
   }
 }
 
+/** Single frame: grid background, mulch squares, players, click effects. */
 function render(now = performance.now()) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -1456,6 +1640,7 @@ function render(now = performance.now()) {
   }
 }
 
+/** Prevent WASD while typing in chat or name field. */
 function isChatFocused() {
   return document.activeElement === messageInput || document.activeElement === playerNameInput;
 }
@@ -1464,6 +1649,10 @@ function clearMovementKeys() {
   keys.w = keys.a = keys.s = keys.d = false;
   moveTarget = null;
 }
+
+/* ==========================================================================
+   INPUT HANDLERS — pointer (pan/click/pinch), wheel zoom, keyboard WASD
+   ========================================================================== */
 
 canvas.addEventListener("pointerdown", (e) => {
   if (!myPlayerId || isChatFocused()) return;
@@ -1532,6 +1721,7 @@ canvas.addEventListener("pointermove", (e) => {
   camera.y = next.y;
 });
 
+/** Pointer up: if not a drag, treat as click-to-move with ripple effect. */
 function finishPointerInteraction(e) {
   activePointers.delete(e.pointerId);
   if (pinchState && activePointers.size < 2) {
@@ -1615,6 +1805,10 @@ messageForm.addEventListener("submit", (e) => {
   addChatMessage(text, true);
   messageInput.value = "";
 });
+
+/* ==========================================================================
+   BOOTSTRAP — auto-connect on page load; pagehide triggers clean leave
+   ========================================================================== */
 
 leaveBtn.addEventListener("click", () => {
   leaveSession({ reconnect: true });
