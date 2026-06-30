@@ -334,11 +334,92 @@ input[type="text"]::placeholder {
   color: var(--text-muted);
 }
 
+.game-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 #game-canvas {
   flex: 1;
   display: block;
   width: 100%;
+  height: 100%;
   cursor: crosshair;
+}
+
+.leaderboard {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 11.5rem;
+  max-height: calc(100% - 1.5rem);
+  overflow-y: auto;
+  background: rgba(26, 35, 50, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.leaderboard-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.leaderboard-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.leaderboard-list li {
+  display: grid;
+  grid-template-columns: 1.25rem 1fr auto;
+  gap: 0.35rem;
+  align-items: center;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.15rem;
+  border-radius: 4px;
+}
+
+.leaderboard-list li.is-local {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.leaderboard-list .rank {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.leaderboard-list .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leaderboard-list .score {
+  font-weight: 700;
+  color: #c4a574;
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboard-empty {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 0.15rem 0;
 }
 
 .chat-sidebar {

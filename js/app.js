@@ -19,11 +19,15 @@ const GUEST_RECONNECT_DELAY_MS = 2500;
 const RECONNECT_RETRY_MS = 3000;
 const MAX_PLAYER_NAME_LENGTH = 24;
 const RENAME_DEBOUNCE_MS = 100;
+const MULCH_SPAWN_INTERVAL_MS = 5000;
+const MULCH_SIZE = 14;
+const MULCH_COLOR = "#8B5A2B";
 
 const roleBadge = document.getElementById("role-badge");
 const connectionStatus = document.getElementById("connection-status");
 const playerCountEl = document.getElementById("player-count");
 const playerNameInput = document.getElementById("player-name-input");
+const leaderboardList = document.getElementById("leaderboard-list");
 const messages = document.getElementById("messages");
 const messageForm = document.getElementById("message-form");
 const messageInput = document.getElementById("message-input");
@@ -40,6 +44,8 @@ let joinTimeout = null;
 let reconnectTimeout = null;
 let myPlayerId = null;
 let players = {};
+let mulchPieces = [];
+let mulchSpawnInterval = null;
 let nextJoinOrder = 1;
 let animationId = null;
 let lastFrameTime = 0;
@@ -188,6 +194,8 @@ function applyRename(id, name, fromConn) {
     storePlayerName(trimmed);
   }
 
+  updateLeaderboard();
+
   if (role === "host" && fromConn) {
     broadcast({ type: "rename", id, name: trimmed }, fromConn);
   }
@@ -313,8 +321,11 @@ function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntent
   }
   pendingRemovals.clear();
 
+  stopMulchSpawning();
+
   if (!keepPlayers) {
     stopGameLoop();
+    mulchPieces = [];
   }
 
   for (const conn of connections.values()) {
@@ -415,12 +426,15 @@ function onBecameHost() {
     }, 30000);
   }
 
+  startMulchSpawning();
+
   startGameLoop();
   enableChat();
   syncLocalNameInput();
   updateRoleBadge();
   updatePlayerCount();
   updateConnectionStatus();
+  updateLeaderboard();
 
   if (!hasJoinedOnce) {
     addSystemMessage("You are hosting. Others will join automatically.");
@@ -560,6 +574,7 @@ function handleMessage(data, fromConn) {
       }
       addSystemMessage(`${msg.player.name} joined.`);
       updatePlayerCount();
+      updateLeaderboard();
       break;
 
     case "player-left":
@@ -575,6 +590,20 @@ function handleMessage(data, fromConn) {
       } else {
         applyRename(msg.id, msg.name);
       }
+      break;
+
+    case "mulch-spawn":
+      if (!mulchPieces.some((m) => m.id === msg.piece.id)) {
+        mulchPieces.push({ ...msg.piece });
+      }
+      break;
+
+    case "mulch-collect":
+      mulchPieces = mulchPieces.filter((m) => m.id !== msg.mulchId);
+      if (players[msg.playerId]) {
+        players[msg.playerId].mulch = msg.mulch;
+      }
+      updateLeaderboard();
       break;
 
     case "leave":
@@ -611,6 +640,7 @@ function handleGuestHello(connection, playerId, preferredName) {
     type: "welcome",
     playerId,
     players: getPlayersSnapshot(),
+    mulch: getMulchSnapshot(),
     migrating: hostRecentlyMigrated && isReconnect,
   });
 
@@ -621,6 +651,16 @@ function handleGuestHello(connection, playerId, preferredName) {
 
   updatePlayerCount();
   updateConnectionStatus();
+  updateLeaderboard();
+}
+
+function getMulchSnapshot() {
+  return mulchPieces.map((m) => ({ id: m.id, x: m.x, y: m.y }));
+}
+
+function applyMulchSnapshot(mulch) {
+  if (!Array.isArray(mulch)) return;
+  mulchPieces = mulch.map((m) => ({ id: m.id, x: m.x, y: m.y }));
 }
 
 function copyPlayerFromSnapshot(p) {
@@ -632,6 +672,7 @@ function copyPlayerFromSnapshot(p) {
     targetX: p.targetX ?? x,
     targetY: p.targetY ?? y,
     name: p.name,
+    mulch: p.mulch ?? 0,
     isHost: !!p.isHost,
     joinOrder: p.joinOrder,
   };
@@ -649,6 +690,7 @@ function mergePlayerState(incoming) {
 
     const local = players[id];
     local.name = incomingPlayer.name;
+    local.mulch = incomingPlayer.mulch ?? local.mulch ?? 0;
     local.isHost = !!incomingPlayer.isHost;
     local.joinOrder = incomingPlayer.joinOrder;
 
@@ -683,8 +725,13 @@ function applyWelcome(msg) {
       targetX: center.x,
       targetY: center.y,
       name: getStoredPlayerName(),
+      mulch: 0,
       joinOrder: nextJoinOrder++,
     };
+  }
+
+  if (msg.mulch) {
+    applyMulchSnapshot(msg.mulch);
   }
 
   syncLocalNameInput();
@@ -694,6 +741,7 @@ function applyWelcome(msg) {
   updateRoleBadge();
   setConnectionState("connected", "Connected");
   updatePlayerCount();
+  updateLeaderboard();
 
   if (!hasJoinedOnce) {
     addSystemMessage("Use WASD to move.");
@@ -720,12 +768,14 @@ function spawnPlayer(id, name) {
     targetX: center.x,
     targetY: center.y,
     name: sanitizePlayerName(name),
+    mulch: 0,
   };
 }
 
 function removePlayer(id) {
   delete players[id];
   updatePlayerCount();
+  updateLeaderboard();
 }
 
 function applyMove(id, x, y) {
@@ -744,6 +794,7 @@ function getPlayersSnapshot() {
       x: p.targetX ?? p.x,
       y: p.targetY ?? p.y,
       name: p.name,
+      mulch: p.mulch ?? 0,
       isHost: !!p.isHost,
       joinOrder: p.joinOrder,
     };
@@ -867,6 +918,7 @@ function handleHostDisconnect() {
 
 function attemptHostMigration() {
   const preservedPlayers = getPlayersSnapshot();
+  const preservedMulch = getMulchSnapshot();
   destroyPeer({ keepPlayers: true, keepMessages: true, preserveMigrating: true });
   migrating = true;
   setConnectionState("waiting", "Becoming host…");
@@ -875,6 +927,7 @@ function attemptHostMigration() {
   for (const [id, p] of Object.entries(preservedPlayers)) {
     players[id] = copyPlayerFromSnapshot(p);
   }
+  applyMulchSnapshot(preservedMulch);
 
   removeHostPlayer();
   if (players[myPlayerId]) {
@@ -935,6 +988,105 @@ function updatePlayerCount() {
   playerCountEl.textContent = count === 1 ? "1 player" : `${count} players`;
 }
 
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function updateLeaderboard() {
+  const sorted = Object.entries(players)
+    .map(([id, p]) => ({ id, name: p.name, mulch: p.mulch ?? 0 }))
+    .sort((a, b) => b.mulch - a.mulch || a.name.localeCompare(b.name));
+
+  if (sorted.length === 0) {
+    leaderboardList.innerHTML = `<li class="leaderboard-empty">No players yet</li>`;
+    return;
+  }
+
+  leaderboardList.innerHTML = sorted
+    .map((entry, index) => {
+      const localClass = entry.id === myPlayerId ? " is-local" : "";
+      return `<li class="${localClass.trim()}">
+        <span class="rank">${index + 1}</span>
+        <span class="name">${escapeHtml(entry.name)}</span>
+        <span class="score">${entry.mulch}</span>
+      </li>`;
+    })
+    .join("");
+}
+
+function startMulchSpawning() {
+  if (role !== "host" || mulchSpawnInterval) return;
+  mulchSpawnInterval = setInterval(() => {
+    if (role === "host" && canvas.width > 0 && canvas.height > 0) {
+      spawnMulch();
+    }
+  }, MULCH_SPAWN_INTERVAL_MS);
+}
+
+function stopMulchSpawning() {
+  if (mulchSpawnInterval) {
+    clearInterval(mulchSpawnInterval);
+    mulchSpawnInterval = null;
+  }
+}
+
+function spawnMulch() {
+  const padding = MULCH_SIZE / 2 + PLAYER_HALF;
+  const maxX = canvas.width - padding;
+  const maxY = canvas.height - padding;
+  if (maxX <= padding || maxY <= padding) return;
+
+  const piece = {
+    id: crypto.randomUUID(),
+    x: padding + Math.random() * (maxX - padding),
+    y: padding + Math.random() * (maxY - padding),
+  };
+
+  mulchPieces.push(piece);
+  broadcast({ type: "mulch-spawn", piece });
+}
+
+function getPlayerPosition(p) {
+  return { x: p.targetX ?? p.x, y: p.targetY ?? p.y };
+}
+
+function checkMulchCollisions() {
+  if (role !== "host") return;
+
+  for (let i = mulchPieces.length - 1; i >= 0; i--) {
+    const piece = mulchPieces[i];
+    for (const [playerId, player] of Object.entries(players)) {
+      const pos = getPlayerPosition(player);
+      const dist = Math.hypot(pos.x - piece.x, pos.y - piece.y);
+      if (dist < PLAYER_HALF + MULCH_SIZE / 2) {
+        collectMulch(playerId, piece.id);
+        break;
+      }
+    }
+  }
+}
+
+function collectMulch(playerId, mulchId) {
+  const pieceIndex = mulchPieces.findIndex((m) => m.id === mulchId);
+  if (pieceIndex === -1 || !players[playerId]) return;
+
+  mulchPieces.splice(pieceIndex, 1);
+  players[playerId].mulch = (players[playerId].mulch ?? 0) + 1;
+
+  broadcast({
+    type: "mulch-collect",
+    playerId,
+    mulchId,
+    mulch: players[playerId].mulch,
+  });
+
+  updateLeaderboard();
+}
+
 function addSystemMessage(text) {
   const el = document.createElement("div");
   el.className = "message system";
@@ -963,6 +1115,9 @@ function startGameLoop() {
     lastFrameTime = now;
     updateLocalPlayer();
     updateRemotePlayers(dt);
+    if (role === "host") {
+      checkMulchCollisions();
+    }
     render();
     animationId = requestAnimationFrame(loop);
   }
@@ -1042,6 +1197,16 @@ function render() {
     ctx.moveTo(0, y);
     ctx.lineTo(canvas.width, y);
     ctx.stroke();
+  }
+
+  for (const piece of mulchPieces) {
+    ctx.fillStyle = MULCH_COLOR;
+    ctx.fillRect(
+      piece.x - MULCH_SIZE / 2,
+      piece.y - MULCH_SIZE / 2,
+      MULCH_SIZE,
+      MULCH_SIZE,
+    );
   }
 
   for (const [id, p] of Object.entries(players)) {

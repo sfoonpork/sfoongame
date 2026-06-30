@@ -30,7 +30,13 @@
           <p id="connection-status" class="connection waiting">Connecting…</p>
           <p class="controls-hint">WASD to move</p>
         </div>
-        <canvas id="game-canvas"></canvas>
+        <div class="game-body">
+          <canvas id="game-canvas"></canvas>
+          <aside class="leaderboard" id="leaderboard" aria-label="Mulch leaderboard">
+            <h3 class="leaderboard-title">Mulch</h3>
+            <ol class="leaderboard-list" id="leaderboard-list"></ol>
+          </aside>
+        </div>
       </div>
 
       <aside class="chat-sidebar">
