@@ -6,41 +6,14 @@
   <title>Sfoon Game</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body class="in-room">
   <main class="container" id="main">
-    <header class="header" id="lobby-header">
-      <h1>Sfoon Game</h1>
-      <p class="subtitle">Host a room or join with a code</p>
-    </header>
-
-    <section id="lobby" class="card">
-      <div class="tabs">
-        <button class="tab active" data-tab="host">Host</button>
-        <button class="tab" data-tab="join">Join</button>
-      </div>
-
-      <div id="host-panel" class="panel active">
-        <label for="host-code">Room code</label>
-        <input id="host-code" type="text" placeholder="e.g. GAME42" maxlength="8" autocomplete="off" spellcheck="false">
-        <p class="hint">4–8 letters or numbers</p>
-        <button id="host-btn" class="btn btn-primary">Host Room</button>
-        <p id="host-status" class="status" aria-live="polite"></p>
-      </div>
-
-      <div id="join-panel" class="panel">
-        <label for="join-code">Room code</label>
-        <input id="join-code" type="text" placeholder="Enter host's code" maxlength="8" autocomplete="off" spellcheck="false">
-        <button id="join-btn" class="btn btn-primary">Join Room</button>
-        <p id="join-status" class="status" aria-live="polite"></p>
-      </div>
-    </section>
-
-    <section id="room" class="room-layout hidden">
+    <section id="room" class="room-layout">
       <div class="game-area">
         <div class="game-header">
           <div class="room-info">
-            <span class="badge" id="role-badge">Host</span>
-            <h2>Room <span id="active-code"></span></h2>
+            <span class="badge" id="role-badge">…</span>
+            <h2>Sfoon Game</h2>
           </div>
           <p id="connection-status" class="connection waiting">Connecting…</p>
           <p class="controls-hint">WASD to move</p>
@@ -51,14 +24,14 @@
       <aside class="chat-sidebar">
         <div class="chat-sidebar-header">
           <h3>Chat</h3>
-          <span id="player-count" class="player-count">1 player</span>
+          <span id="player-count" class="player-count">0 players</span>
         </div>
         <div id="messages" class="messages"></div>
         <form id="message-form" class="message-form">
           <input id="message-input" type="text" placeholder="Send a message…" disabled>
           <button type="submit" class="btn btn-secondary" disabled>Send</button>
         </form>
-        <button id="leave-btn" class="btn btn-ghost">Leave Room</button>
+        <button id="leave-btn" class="btn btn-ghost">Leave Game</button>
       </aside>
     </section>
   </main>
