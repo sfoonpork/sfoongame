@@ -20,6 +20,8 @@ const RECONNECT_RETRY_MS = 3000;
 const MAX_PLAYER_NAME_LENGTH = 24;
 const RENAME_DEBOUNCE_MS = 100;
 const MULCH_SPAWN_INTERVAL_MS = 5000;
+const MULCH_RANDOM_MIN_MS = 1000;
+const MULCH_RANDOM_MAX_MS = 10000;
 const MULCH_SIZE = 14;
 const MULCH_COLOR = "#8B5A2B";
 
@@ -46,6 +48,7 @@ let myPlayerId = null;
 let players = {};
 let mulchPieces = [];
 let mulchSpawnInterval = null;
+let mulchRandomTimeout = null;
 let nextJoinOrder = 1;
 let animationId = null;
 let lastFrameTime = 0;
@@ -76,6 +79,15 @@ pibbleSprite.onload = () => {
 };
 
 pibbleSprite.src = "pibble.png";
+
+const munchSound = new Audio("munch-sound-effect.mp3");
+munchSound.preload = "auto";
+
+function playMunchSound() {
+  const sound = munchSound.cloneNode();
+  sound.volume = 0.65;
+  sound.play().catch(() => {});
+}
 
 function getSpriteDimensions() {
   if (!spriteReady) {
@@ -603,6 +615,7 @@ function handleMessage(data, fromConn) {
       if (players[msg.playerId]) {
         players[msg.playerId].mulch = msg.mulch;
       }
+      playMunchSound();
       updateLeaderboard();
       break;
 
@@ -1019,18 +1032,48 @@ function updateLeaderboard() {
 }
 
 function startMulchSpawning() {
-  if (role !== "host" || mulchSpawnInterval) return;
-  mulchSpawnInterval = setInterval(() => {
-    if (role === "host" && canvas.width > 0 && canvas.height > 0) {
-      spawnMulch();
-    }
-  }, MULCH_SPAWN_INTERVAL_MS);
+  if (role !== "host") return;
+
+  if (!mulchSpawnInterval) {
+    mulchSpawnInterval = setInterval(() => {
+      if (role === "host" && canvas.width > 0 && canvas.height > 0) {
+        spawnMulch();
+      }
+    }, MULCH_SPAWN_INTERVAL_MS);
+  }
+
+  scheduleRandomMulchSpawn();
 }
 
 function stopMulchSpawning() {
   if (mulchSpawnInterval) {
     clearInterval(mulchSpawnInterval);
     mulchSpawnInterval = null;
+  }
+  clearRandomMulchSpawn();
+}
+
+function scheduleRandomMulchSpawn() {
+  clearRandomMulchSpawn();
+  if (role !== "host") return;
+
+  const delay =
+    MULCH_RANDOM_MIN_MS +
+    Math.random() * (MULCH_RANDOM_MAX_MS - MULCH_RANDOM_MIN_MS);
+
+  mulchRandomTimeout = setTimeout(() => {
+    mulchRandomTimeout = null;
+    if (role === "host" && canvas.width > 0 && canvas.height > 0) {
+      spawnMulch();
+    }
+    scheduleRandomMulchSpawn();
+  }, delay);
+}
+
+function clearRandomMulchSpawn() {
+  if (mulchRandomTimeout) {
+    clearTimeout(mulchRandomTimeout);
+    mulchRandomTimeout = null;
   }
 }
 
@@ -1076,6 +1119,7 @@ function collectMulch(playerId, mulchId) {
 
   mulchPieces.splice(pieceIndex, 1);
   players[playerId].mulch = (players[playerId].mulch ?? 0) + 1;
+  playMunchSound();
 
   broadcast({
     type: "mulch-collect",
