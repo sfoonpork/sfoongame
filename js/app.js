@@ -27,25 +27,45 @@
 const LOBBY_PEER_ID = "SFOONGAME";
 
 /** PeerJS signaling server (public PeerJS cloud). */
-const PEER_CONFIG = {
-  host: "0.peerjs.com",
-  port: 443,
-  path: "/",
-  secure: true,
-  config: {
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" },
-      { urls: "stun:stun2.l.google.com:19302" },
+const PEERJS_ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  {
+    urls: [
+      "turn:eu-0.turn.peerjs.com:3478",
+      "turn:us-0.turn.peerjs.com:3478",
+      "turn:eu-0.turn.peerjs.com:3478?transport=tcp",
+      "turn:us-0.turn.peerjs.com:3478?transport=tcp",
     ],
+    username: "peerjs",
+    credential: "peerjsp",
   },
-};
+];
+
+/** @param {{ forceRelay?: boolean }} opts */
+function getPeerConfig({ forceRelay = false } = {}) {
+  const config = {
+    iceServers: PEERJS_ICE_SERVERS,
+    sdpSemantics: "unified-plan",
+    iceCandidatePoolSize: 10,
+  };
+  if (forceRelay) {
+    config.iceTransportPolicy = "relay";
+  }
+  return {
+    host: "0.peerjs.com",
+    port: 443,
+    path: "/",
+    secure: true,
+    config,
+  };
+}
 
 // Connection & session
 const JOIN_PEER_OPEN_TIMEOUT_MS = 15000;
 const JOIN_HOST_CONN_TIMEOUT_MS = 30000;
 const WELCOME_TIMEOUT_MS = 12000;
 const GUEST_JOIN_RETRY_MS = 2000;
+const GUEST_RELAY_AFTER_ATTEMPTS = 2;
 const MAX_GUEST_JOIN_ATTEMPTS = 10;
 const MAX_PLAYERS = 8;
 const HOST_MIGRATION_DELAY_MS = 500;   // Successor claims host quickly
@@ -674,7 +694,7 @@ function connect() {
 function attemptClaimHost() {
   role = "host";
   updateRoleBadge();
-  peer = new Peer(LOBBY_PEER_ID, PEER_CONFIG);
+  peer = new Peer(LOBBY_PEER_ID, getPeerConfig());
 
   peer.on("open", () => {
     onBecameHost();
@@ -781,9 +801,11 @@ function attemptJoinAsGuest() {
   clearReconnectTimeout();
   role = "guest";
   updateRoleBadge();
-  setConnectionState("waiting", "Joining game…");
 
-  peer = new Peer(PEER_CONFIG);
+  const useRelay = guestJoinAttempts >= GUEST_RELAY_AFTER_ATTEMPTS;
+  setConnectionState("waiting", useRelay ? "Connecting via relay…" : "Joining game…");
+
+  peer = new Peer(getPeerConfig({ forceRelay: useRelay }));
 
   scheduleJoinTimeout(JOIN_PEER_OPEN_TIMEOUT_MS, () => {
     retryGuestJoin("Signaling timed out — retrying…");
