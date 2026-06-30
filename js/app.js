@@ -697,6 +697,7 @@ function handleMessage(data, fromConn) {
     case "move":
       if (role === "host") {
         applyMove(msg.id, msg.x, msg.y);
+        checkMulchCollisionsForPlayer(msg.id);
         broadcast({ type: "move", id: msg.id, x: msg.x, y: msg.y }, fromConn);
       } else if (players[msg.id]) {
         setPlayerTarget(players[msg.id], msg.x, msg.y);
@@ -1217,6 +1218,8 @@ function spawnMulch() {
 
   mulchPieces.push(piece);
   broadcast({ type: "mulch-spawn", piece });
+  // Handle cases where mulch spawns directly under a player.
+  checkMulchCollisions();
 }
 
 function getPlayerPosition(p) {
@@ -1235,6 +1238,21 @@ function checkMulchCollisions() {
         collectMulch(playerId, piece.id);
         break;
       }
+    }
+  }
+}
+
+function checkMulchCollisionsForPlayer(playerId) {
+  if (role !== "host") return;
+  const player = players[playerId];
+  if (!player) return;
+
+  const pos = getPlayerPosition(player);
+  for (let i = mulchPieces.length - 1; i >= 0; i--) {
+    const piece = mulchPieces[i];
+    const dist = Math.hypot(pos.x - piece.x, pos.y - piece.y);
+    if (dist < PLAYER_HALF + MULCH_SIZE / 2) {
+      collectMulch(playerId, piece.id);
     }
   }
 }
@@ -1347,6 +1365,9 @@ function updateLocalPlayer() {
     p.x = clamped.x;
     p.y = clamped.y;
     syncLocalPosition(p);
+    if (role === "host") {
+      checkMulchCollisionsForPlayer(myPlayerId);
+    }
   }
 }
 
