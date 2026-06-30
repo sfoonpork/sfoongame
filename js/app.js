@@ -10,8 +10,9 @@ const PEER_CONFIG = {
 const JOIN_TIMEOUT_MS = 12000;
 const MAX_PLAYERS = 8;
 const MOVE_SPEED = 4;
-const PLAYER_SPRITE_SIZE = 52;
-const PLAYER_HALF = PLAYER_SPRITE_SIZE / 2;
+const PLAYER_HITBOX_SIZE = 52;
+const PLAYER_DRAW_SIZE = 84;
+const PLAYER_HALF = PLAYER_HITBOX_SIZE / 2;
 const MOVE_SEND_INTERVAL_MS = 50;
 const MOVEMENT_SMOOTHING = 14;
 const HOST_MIGRATION_DELAY_MS = 500;
@@ -68,7 +69,7 @@ const keys = { w: false, a: false, s: false, d: false };
 const pibbleSprite = new Image();
 let spriteReady = false;
 let spriteMask = null;
-let spriteSize = { w: PLAYER_SPRITE_SIZE, h: PLAYER_SPRITE_SIZE };
+let spriteSize = { w: PLAYER_DRAW_SIZE, h: PLAYER_DRAW_SIZE };
 
 const SPRITE_BG_THRESHOLD = 45;
 
@@ -91,11 +92,11 @@ function playMunchSound() {
 
 function getSpriteDimensions() {
   if (!spriteReady) {
-    return { w: PLAYER_SPRITE_SIZE, h: PLAYER_SPRITE_SIZE };
+    return { w: PLAYER_DRAW_SIZE, h: PLAYER_DRAW_SIZE };
   }
   const scale = Math.min(
-    PLAYER_SPRITE_SIZE / pibbleSprite.width,
-    PLAYER_SPRITE_SIZE / pibbleSprite.height,
+    PLAYER_DRAW_SIZE / pibbleSprite.width,
+    PLAYER_DRAW_SIZE / pibbleSprite.height,
   );
   return {
     w: Math.round(pibbleSprite.width * scale),
@@ -127,6 +128,7 @@ function buildSpriteMask() {
 
 function drawPlayer(id, p) {
   const { w, h } = spriteSize;
+  const isLocal = id === myPlayerId;
   let labelOffset = PLAYER_HALF + 4;
 
   if (!spriteReady || !spriteMask) {
@@ -135,25 +137,16 @@ function drawPlayer(id, p) {
     ctx.fillStyle = "#e8edf4";
     ctx.fill();
   } else {
-    const dx = p.x - w / 2;
-    const dy = p.y - h / 2;
-
-    if (id === myPlayerId) {
-      ctx.save();
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(dx - 2, dy - 2, w + 4, h + 4);
-      ctx.restore();
-    }
-
-    ctx.drawImage(spriteMask, dx, dy);
+    ctx.drawImage(spriteMask, p.x - w / 2, p.y - h / 2);
     labelOffset = h / 2 + 4;
   }
 
-  ctx.fillStyle = "#e8edf4";
-  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.fillStyle = isLocal ? "#ffffff" : "#e8edf4";
+  ctx.font = isLocal
+    ? "bold 11px Segoe UI, system-ui, sans-serif"
+    : "11px Segoe UI, system-ui, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(p.name, p.x, p.y - labelOffset);
+  ctx.fillText(isLocal ? `${p.name} (you)` : p.name, p.x, p.y - labelOffset);
 }
 
 function assignPlayerName() {
