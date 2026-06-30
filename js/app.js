@@ -17,21 +17,13 @@ const MOVEMENT_SMOOTHING = 14;
 const HOST_MIGRATION_DELAY_MS = 500;
 const GUEST_RECONNECT_DELAY_MS = 2500;
 const RECONNECT_RETRY_MS = 3000;
-
-const PLAYER_COLORS = [
-  "#3b82f6",
-  "#22c55e",
-  "#f59e0b",
-  "#ef4444",
-  "#a855f7",
-  "#ec4899",
-  "#14b8a6",
-  "#f97316",
-];
+const MAX_PLAYER_NAME_LENGTH = 24;
+const RENAME_DEBOUNCE_MS = 100;
 
 const roleBadge = document.getElementById("role-badge");
 const connectionStatus = document.getElementById("connection-status");
 const playerCountEl = document.getElementById("player-count");
+const playerNameInput = document.getElementById("player-name-input");
 const messages = document.getElementById("messages");
 const messageForm = document.getElementById("message-form");
 const messageInput = document.getElementById("message-input");
@@ -65,16 +57,16 @@ const PLAYER_RECONNECT_GRACE_MS = 2500;
 const keys = { w: false, a: false, s: false, d: false };
 
 const pibbleSprite = new Image();
-const tintedSprites = new Map();
 let spriteReady = false;
 let spriteMask = null;
+let spriteSize = { w: PLAYER_SPRITE_SIZE, h: PLAYER_SPRITE_SIZE };
 
 const SPRITE_BG_THRESHOLD = 45;
 
 pibbleSprite.onload = () => {
   spriteReady = true;
-  tintedSprites.clear();
   spriteMask = buildSpriteMask();
+  spriteSize = getSpriteDimensions();
 };
 
 pibbleSprite.src = "pibble.png";
@@ -115,42 +107,16 @@ function buildSpriteMask() {
   return off;
 }
 
-function getTintedSprite(color) {
-  if (!spriteReady || !spriteMask) return null;
-  if (tintedSprites.has(color)) return tintedSprites.get(color);
-
-  const { w, h } = getSpriteDimensions();
-  const off = document.createElement("canvas");
-  off.width = w;
-  off.height = h;
-  const octx = off.getContext("2d");
-  octx.drawImage(spriteMask, 0, 0);
-  octx.globalCompositeOperation = "multiply";
-  octx.fillStyle = color;
-  octx.fillRect(0, 0, w, h);
-  octx.globalCompositeOperation = "source-over";
-
-  const entry = { canvas: off, w, h };
-  tintedSprites.set(color, entry);
-  return entry;
-}
-
 function drawPlayer(id, p) {
-  const tinted = getTintedSprite(p.color);
+  const { w, h } = spriteSize;
   let labelOffset = PLAYER_HALF + 4;
 
-  if (!tinted) {
+  if (!spriteReady || !spriteMask) {
     ctx.beginPath();
     ctx.arc(p.x, p.y, PLAYER_HALF * 0.35, 0, Math.PI * 2);
-    ctx.fillStyle = p.color;
+    ctx.fillStyle = "#e8edf4";
     ctx.fill();
-    if (id === myPlayerId) {
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
   } else {
-    const { canvas: sprite, w, h } = tinted;
     const dx = p.x - w / 2;
     const dy = p.y - h / 2;
 
@@ -162,7 +128,7 @@ function drawPlayer(id, p) {
       ctx.restore();
     }
 
-    ctx.drawImage(sprite, dx, dy);
+    ctx.drawImage(spriteMask, dx, dy);
     labelOffset = h / 2 + 4;
   }
 
@@ -181,6 +147,68 @@ function assignPlayerName() {
   let n = 1;
   while (usedNumbers.has(n)) n++;
   return `Player ${n}`;
+}
+
+function sanitizePlayerName(name) {
+  const trimmed = String(name || "").trim().slice(0, MAX_PLAYER_NAME_LENGTH);
+  return trimmed || assignPlayerName();
+}
+
+function getStoredPlayerName() {
+  return sanitizePlayerName(sessionStorage.getItem("playerName") || assignPlayerName());
+}
+
+function storePlayerName(name) {
+  sessionStorage.setItem("playerName", sanitizePlayerName(name));
+}
+
+let syncingNameInput = false;
+let renameTimer = null;
+
+function updateNameInput(name) {
+  syncingNameInput = true;
+  playerNameInput.value = name;
+  syncingNameInput = false;
+}
+
+function syncLocalNameInput() {
+  if (players[myPlayerId]) {
+    updateNameInput(players[myPlayerId].name);
+  }
+}
+
+function applyRename(id, name, fromConn) {
+  if (!players[id]) return;
+
+  const trimmed = sanitizePlayerName(name);
+  players[id].name = trimmed;
+
+  if (id === myPlayerId) {
+    updateNameInput(trimmed);
+    storePlayerName(trimmed);
+  }
+
+  if (role === "host" && fromConn) {
+    broadcast({ type: "rename", id, name: trimmed }, fromConn);
+  }
+}
+
+function sendRename(name) {
+  if (!myPlayerId || !players[myPlayerId]) return;
+
+  const trimmed = sanitizePlayerName(name);
+  players[myPlayerId].name = trimmed;
+  storePlayerName(trimmed);
+
+  clearTimeout(renameTimer);
+  renameTimer = setTimeout(() => {
+    const msg = { type: "rename", id: myPlayerId, name: trimmed };
+    if (role === "host") {
+      broadcast(msg);
+    } else if (hostConn?.open) {
+      send(hostConn, msg);
+    }
+  }, RENAME_DEBOUNCE_MS);
 }
 
 function cancelPendingRemoval(playerId) {
@@ -372,20 +400,16 @@ function onBecameHost() {
   connectedToHost = true;
 
   if (!players[myPlayerId]) {
-    spawnPlayer(myPlayerId, "Host");
+    spawnPlayer(myPlayerId, getStoredPlayerName());
     players[myPlayerId].joinOrder = 0;
     nextJoinOrder = 1;
-  } else {
-    players[myPlayerId].name = "Host";
-    if (wasMigration) {
-      const orders = Object.values(players).map((p) => p.joinOrder ?? 0);
-      nextJoinOrder = Math.max(0, ...orders) + 1;
-    }
   }
   players[myPlayerId].isHost = true;
 
   if (wasMigration) {
     hostRecentlyMigrated = true;
+    const orders = Object.values(players).map((p) => p.joinOrder ?? 0);
+    nextJoinOrder = Math.max(0, ...orders) + 1;
     setTimeout(() => {
       hostRecentlyMigrated = false;
     }, 30000);
@@ -393,6 +417,7 @@ function onBecameHost() {
 
   startGameLoop();
   enableChat();
+  syncLocalNameInput();
   updateRoleBadge();
   updatePlayerCount();
   updateConnectionStatus();
@@ -456,7 +481,11 @@ function setupGuestConnection(connection) {
 function setupHostConnection(connection) {
   connection.on("open", () => {
     clearJoinTimeout();
-    send(connection, { type: "hello", playerId: myPlayerId });
+    send(connection, {
+      type: "hello",
+      playerId: myPlayerId,
+      name: getStoredPlayerName(),
+    });
   });
 
   connection.on("data", (data) => {
@@ -489,7 +518,7 @@ function handleMessage(data, fromConn) {
   switch (msg.type) {
     case "hello":
       if (role !== "host" || !fromConn) break;
-      handleGuestHello(fromConn, msg.playerId);
+      handleGuestHello(fromConn, msg.playerId, msg.name);
       break;
 
     case "welcome":
@@ -540,6 +569,14 @@ function handleMessage(data, fromConn) {
       }
       break;
 
+    case "rename":
+      if (role === "host" && fromConn) {
+        applyRename(msg.id, msg.name, fromConn);
+      } else {
+        applyRename(msg.id, msg.name);
+      }
+      break;
+
     case "leave":
       if (role === "host" && fromConn) {
         const playerId = msg.playerId || connToPlayer.get(fromConn.peer);
@@ -552,7 +589,7 @@ function handleMessage(data, fromConn) {
   }
 }
 
-function handleGuestHello(connection, playerId) {
+function handleGuestHello(connection, playerId, preferredName) {
   cancelPendingRemoval(playerId);
 
   const isReconnect = !!players[playerId];
@@ -563,7 +600,7 @@ function handleGuestHello(connection, playerId) {
       connection.close();
       return;
     }
-    spawnPlayer(playerId, assignPlayerName());
+    spawnPlayer(playerId, sanitizePlayerName(preferredName));
     players[playerId].joinOrder = nextJoinOrder++;
   } else {
     detachConnectionsForPlayer(playerId, connection.peer);
@@ -594,7 +631,6 @@ function copyPlayerFromSnapshot(p) {
     y,
     targetX: p.targetX ?? x,
     targetY: p.targetY ?? y,
-    color: p.color,
     name: p.name,
     isHost: !!p.isHost,
     joinOrder: p.joinOrder,
@@ -613,11 +649,11 @@ function mergePlayerState(incoming) {
 
     const local = players[id];
     local.name = incomingPlayer.name;
-    local.color = incomingPlayer.color;
     local.isHost = !!incomingPlayer.isHost;
     local.joinOrder = incomingPlayer.joinOrder;
 
     if (id === myPlayerId) {
+      updateNameInput(local.name);
       continue;
     }
 
@@ -646,11 +682,12 @@ function applyWelcome(msg) {
       y: center.y,
       targetX: center.x,
       targetY: center.y,
-      color: PLAYER_COLORS[Object.keys(players).length % PLAYER_COLORS.length],
-      name: assignPlayerName(),
+      name: getStoredPlayerName(),
       joinOrder: nextJoinOrder++,
     };
   }
+
+  syncLocalNameInput();
 
   startGameLoop();
   enableChat();
@@ -682,8 +719,7 @@ function spawnPlayer(id, name) {
     y: center.y,
     targetX: center.x,
     targetY: center.y,
-    color: PLAYER_COLORS[Object.keys(players).length % PLAYER_COLORS.length],
-    name,
+    name: sanitizePlayerName(name),
   };
 }
 
@@ -707,7 +743,6 @@ function getPlayersSnapshot() {
     snapshot[id] = {
       x: p.targetX ?? p.x,
       y: p.targetY ?? p.y,
-      color: p.color,
       name: p.name,
       isHost: !!p.isHost,
       joinOrder: p.joinOrder,
@@ -792,6 +827,7 @@ function leaveSession({ reconnect = false } = {}) {
   if (!reconnect) {
     notifyLeave();
     sessionStorage.removeItem("playerId");
+    sessionStorage.removeItem("playerName");
   }
 
   destroyPeer({ preserveIntentionalLeave: true });
@@ -843,7 +879,6 @@ function attemptHostMigration() {
   removeHostPlayer();
   if (players[myPlayerId]) {
     players[myPlayerId].isHost = true;
-    players[myPlayerId].name = "Host";
   }
 
   attemptClaimHost();
@@ -881,11 +916,13 @@ function updateRoleBadge() {
 function enableChat() {
   messageInput.disabled = false;
   messageForm.querySelector("button").disabled = false;
+  playerNameInput.disabled = false;
 }
 
 function disableChat() {
   messageInput.disabled = true;
   messageForm.querySelector("button").disabled = true;
+  playerNameInput.disabled = true;
 }
 
 function setConnectionState(state, text) {
@@ -1013,7 +1050,7 @@ function render() {
 }
 
 function isChatFocused() {
-  return document.activeElement === messageInput;
+  return document.activeElement === messageInput || document.activeElement === playerNameInput;
 }
 
 function clearMovementKeys() {
@@ -1040,6 +1077,13 @@ window.addEventListener("keyup", (e) => {
 
 messageInput.addEventListener("focus", clearMovementKeys);
 messageInput.addEventListener("blur", clearMovementKeys);
+playerNameInput.addEventListener("focus", clearMovementKeys);
+playerNameInput.addEventListener("blur", clearMovementKeys);
+
+playerNameInput.addEventListener("input", () => {
+  if (syncingNameInput || !myPlayerId) return;
+  sendRename(playerNameInput.value);
+});
 
 window.addEventListener("resize", resizeCanvas);
 
@@ -1048,7 +1092,7 @@ messageForm.addEventListener("submit", (e) => {
   const text = messageInput.value.trim();
   if (!text) return;
 
-  const fromName = players[myPlayerId]?.name || (role === "host" ? "Host" : "Guest");
+  const fromName = players[myPlayerId]?.name || "Player";
   const msg = { type: "chat", text, from: fromName };
 
   if (role === "host") {

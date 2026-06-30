@@ -262,6 +262,41 @@ input[type="text"]::placeholder {
   font-weight: 600;
 }
 
+.player-name-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 0.5rem;
+}
+
+.player-name-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+#player-name-input {
+  width: 10rem;
+  padding: 0.4rem 0.65rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-family: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+#player-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#player-name-input:disabled {
+  opacity: 0.45;
+}
+
 .badge {
   font-size: 0.7rem;
   font-weight: 700;
