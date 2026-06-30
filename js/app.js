@@ -12,6 +12,7 @@ const MAX_PLAYERS = 8;
 const MOVE_SPEED = 4;
 const PLAYER_RADIUS = 8;
 const MOVE_SEND_INTERVAL_MS = 50;
+const MOVEMENT_SMOOTHING = 14;
 const HOST_MIGRATION_DELAY_MS = 500;
 const GUEST_RECONNECT_DELAY_MS = 2500;
 const RECONNECT_RETRY_MS = 3000;
@@ -48,6 +49,7 @@ let myPlayerId = null;
 let players = {};
 let nextJoinOrder = 1;
 let animationId = null;
+let lastFrameTime = 0;
 let lastMoveSent = 0;
 let lastSentPos = { x: 0, y: 0 };
 let connectedToHost = false;
@@ -327,13 +329,16 @@ function handleMessage(data, fromConn) {
         applyMove(msg.id, msg.x, msg.y);
         broadcast({ type: "move", id: msg.id, x: msg.x, y: msg.y }, fromConn);
       } else if (players[msg.id]) {
-        players[msg.id].x = msg.x;
-        players[msg.id].y = msg.y;
+        setPlayerTarget(players[msg.id], msg.x, msg.y);
       }
       break;
 
     case "player-joined":
       players[msg.id] = { ...msg.player };
+      if (players[msg.id].targetX === undefined) {
+        players[msg.id].targetX = msg.player.x;
+        players[msg.id].targetY = msg.player.y;
+      }
       addSystemMessage(`${msg.player.name} joined.`);
       updatePlayerCount();
       break;
@@ -379,6 +384,10 @@ function applyWelcome(msg) {
 
   for (const [id, p] of Object.entries(msg.players)) {
     players[id] = { ...p };
+    if (p.targetX === undefined) {
+      players[id].targetX = p.x;
+      players[id].targetY = p.y;
+    }
   }
 
   if (!players[myPlayerId]) {
@@ -404,11 +413,24 @@ function applyWelcome(msg) {
   }
 }
 
+function setPlayerPosition(p, x, y) {
+  p.x = x;
+  p.y = y;
+  p.targetX = x;
+  p.targetY = y;
+}
+
+function setPlayerTarget(p, x, y) {
+  p.targetX = x;
+  p.targetY = y;
+}
 function spawnPlayer(id, name) {
   const center = getCanvasCenter();
   players[id] = {
     x: center.x,
     y: center.y,
+    targetX: center.x,
+    targetY: center.y,
     color: PLAYER_COLORS[Object.keys(players).length % PLAYER_COLORS.length],
     name,
   };
@@ -420,9 +442,11 @@ function removePlayer(id) {
 }
 
 function applyMove(id, x, y) {
-  if (players[id]) {
-    players[id].x = x;
-    players[id].y = y;
+  if (!players[id]) return;
+  if (id === myPlayerId) {
+    setPlayerPosition(players[id], x, y);
+  } else {
+    setPlayerTarget(players[id], x, y);
   }
 }
 
@@ -430,8 +454,8 @@ function getPlayersSnapshot() {
   const snapshot = {};
   for (const [id, p] of Object.entries(players)) {
     snapshot[id] = {
-      x: p.x,
-      y: p.y,
+      x: p.targetX ?? p.x,
+      y: p.targetY ?? p.y,
       color: p.color,
       name: p.name,
       isHost: !!p.isHost,
@@ -588,12 +612,25 @@ function addChatMessage(text, isLocal, fromName) {
 
 function startGameLoop() {
   if (animationId) return;
-  function loop() {
+  lastFrameTime = performance.now();
+  function loop(now) {
+    const dt = Math.min((now - lastFrameTime) / 1000, 0.05);
+    lastFrameTime = now;
     updateLocalPlayer();
+    updateRemotePlayers(dt);
     render();
     animationId = requestAnimationFrame(loop);
   }
-  loop();
+  animationId = requestAnimationFrame(loop);
+}
+
+function updateRemotePlayers(dt) {
+  const t = 1 - Math.exp(-MOVEMENT_SMOOTHING * dt);
+  for (const [id, p] of Object.entries(players)) {
+    if (id === myPlayerId || p.targetX === undefined) continue;
+    p.x += (p.targetX - p.x) * t;
+    p.y += (p.targetY - p.y) * t;
+  }
 }
 
 function stopGameLoop() {
@@ -618,6 +655,8 @@ function updateLocalPlayer() {
   if (moved) {
     p.x = Math.max(PLAYER_RADIUS, Math.min(canvas.width - PLAYER_RADIUS, p.x));
     p.y = Math.max(PLAYER_RADIUS, Math.min(canvas.height - PLAYER_RADIUS, p.y));
+    p.targetX = p.x;
+    p.targetY = p.y;
 
     const now = Date.now();
     if (now - lastMoveSent >= MOVE_SEND_INTERVAL_MS) {
