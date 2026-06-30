@@ -56,6 +56,7 @@ let connectedToHost = false;
 let migrating = false;
 let hasJoinedOnce = false;
 let intentionalLeave = false;
+let sessionEnded = false;
 
 const keys = { w: false, a: false, s: false, d: false };
 
@@ -107,10 +108,12 @@ function clearReconnectTimeout() {
   }
 }
 
-function destroyPeer({ keepPlayers = false, keepMessages = false } = {}) {
+function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntentionalLeave = false } = {}) {
   clearJoinTimeout();
   clearReconnectTimeout();
-  intentionalLeave = false;
+  if (!preserveIntentionalLeave) {
+    intentionalLeave = false;
+  }
 
   if (!keepPlayers) {
     stopGameLoop();
@@ -147,6 +150,7 @@ function destroyPeer({ keepPlayers = false, keepMessages = false } = {}) {
 }
 
 function connect() {
+  sessionEnded = false;
   myPlayerId = getOrCreatePlayerId();
   intentionalLeave = false;
   migrating = false;
@@ -349,6 +353,16 @@ function handleMessage(data, fromConn) {
         removePlayer(msg.id);
       }
       break;
+
+    case "leave":
+      if (role === "host" && fromConn) {
+        const playerId = msg.playerId || connToPlayer.get(fromConn.peer);
+        removeConnectedPlayer(playerId, fromConn);
+      } else if (role === "guest" && msg.playerId && players[msg.playerId]) {
+        addSystemMessage(`${players[msg.playerId].name} left.`);
+        removePlayer(msg.playerId);
+      }
+      break;
   }
 }
 
@@ -488,10 +502,11 @@ function removeHostPlayer() {
   }
 }
 
-function handleGuestDisconnect(connection) {
-  const playerId = connToPlayer.get(connection.peer);
-  connections.delete(connection.peer);
-  connToPlayer.delete(connection.peer);
+function removeConnectedPlayer(playerId, connection) {
+  if (connection) {
+    connections.delete(connection.peer);
+    connToPlayer.delete(connection.peer);
+  }
 
   if (playerId && players[playerId]) {
     addSystemMessage(`${players[playerId].name} left.`);
@@ -500,6 +515,40 @@ function handleGuestDisconnect(connection) {
   }
 
   updateConnectionStatus();
+}
+
+function handleGuestDisconnect(connection) {
+  removeConnectedPlayer(connToPlayer.get(connection.peer), connection);
+}
+
+function notifyLeave() {
+  if (!myPlayerId) return;
+  const msg = { type: "leave", playerId: myPlayerId };
+  try {
+    if (role === "host") {
+      broadcast(msg);
+    } else if (hostConn?.open) {
+      send(hostConn, msg);
+    }
+  } catch (_) {
+    // Best-effort during tab close
+  }
+}
+
+function leaveSession({ reconnect = false } = {}) {
+  if (sessionEnded) return;
+
+  intentionalLeave = true;
+  notifyLeave();
+  sessionStorage.removeItem("playerId");
+  destroyPeer({ preserveIntentionalLeave: true });
+
+  if (reconnect) {
+    hasJoinedOnce = false;
+    connect();
+  } else {
+    sessionEnded = true;
+  }
 }
 
 function handleHostDisconnect() {
@@ -770,11 +819,11 @@ messageForm.addEventListener("submit", (e) => {
 });
 
 leaveBtn.addEventListener("click", () => {
-  intentionalLeave = true;
-  hasJoinedOnce = false;
-  sessionStorage.removeItem("playerId");
-  destroyPeer();
-  connect();
+  leaveSession({ reconnect: true });
+});
+
+window.addEventListener("pagehide", () => {
+  leaveSession();
 });
 
 connect();
