@@ -10,7 +10,8 @@ const PEER_CONFIG = {
 const JOIN_TIMEOUT_MS = 12000;
 const MAX_PLAYERS = 8;
 const MOVE_SPEED = 4;
-const PLAYER_RADIUS = 8;
+const PLAYER_SPRITE_SIZE = 52;
+const PLAYER_HALF = PLAYER_SPRITE_SIZE / 2;
 const MOVE_SEND_INTERVAL_MS = 50;
 const MOVEMENT_SMOOTHING = 14;
 const HOST_MIGRATION_DELAY_MS = 500;
@@ -62,6 +63,86 @@ const pendingRemovals = new Map();
 const PLAYER_RECONNECT_GRACE_MS = 2500;
 
 const keys = { w: false, a: false, s: false, d: false };
+
+const pibbleSprite = new Image();
+const tintedSprites = new Map();
+let spriteReady = false;
+
+pibbleSprite.onload = () => {
+  spriteReady = true;
+  tintedSprites.clear();
+};
+pibbleSprite.src = "pibble.png";
+
+function getSpriteDimensions() {
+  if (!spriteReady) {
+    return { w: PLAYER_SPRITE_SIZE, h: PLAYER_SPRITE_SIZE };
+  }
+  const scale = Math.min(
+    PLAYER_SPRITE_SIZE / pibbleSprite.width,
+    PLAYER_SPRITE_SIZE / pibbleSprite.height,
+  );
+  return {
+    w: Math.round(pibbleSprite.width * scale),
+    h: Math.round(pibbleSprite.height * scale),
+  };
+}
+
+function getTintedSprite(color) {
+  if (!spriteReady) return null;
+  if (tintedSprites.has(color)) return tintedSprites.get(color);
+
+  const { w, h } = getSpriteDimensions();
+  const off = document.createElement("canvas");
+  off.width = w;
+  off.height = h;
+  const octx = off.getContext("2d");
+  octx.drawImage(pibbleSprite, 0, 0, w, h);
+  octx.globalCompositeOperation = "multiply";
+  octx.fillStyle = color;
+  octx.fillRect(0, 0, w, h);
+
+  const entry = { canvas: off, w, h };
+  tintedSprites.set(color, entry);
+  return entry;
+}
+
+function drawPlayer(id, p) {
+  const tinted = getTintedSprite(p.color);
+  let labelOffset = PLAYER_HALF + 4;
+
+  if (!tinted) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, PLAYER_HALF * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+    if (id === myPlayerId) {
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  } else {
+    const { canvas: sprite, w, h } = tinted;
+    const dx = p.x - w / 2;
+    const dy = p.y - h / 2;
+
+    if (id === myPlayerId) {
+      ctx.save();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(dx - 2, dy - 2, w + 4, h + 4);
+      ctx.restore();
+    }
+
+    ctx.drawImage(sprite, dx, dy);
+    labelOffset = h / 2 + 4;
+  }
+
+  ctx.fillStyle = "#e8edf4";
+  ctx.font = "11px Segoe UI, system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(p.name, p.x, p.y - labelOffset);
+}
 
 function assignPlayerName() {
   const usedNumbers = new Set();
@@ -852,8 +933,8 @@ function updateLocalPlayer() {
   if (keys.d) { p.x += MOVE_SPEED; moved = true; }
 
   if (moved) {
-    p.x = Math.max(PLAYER_RADIUS, Math.min(canvas.width - PLAYER_RADIUS, p.x));
-    p.y = Math.max(PLAYER_RADIUS, Math.min(canvas.height - PLAYER_RADIUS, p.y));
+    p.x = Math.max(PLAYER_HALF, Math.min(canvas.width - PLAYER_HALF, p.x));
+    p.y = Math.max(PLAYER_HALF, Math.min(canvas.height - PLAYER_HALF, p.y));
     p.targetX = p.x;
     p.targetY = p.y;
 
@@ -899,21 +980,7 @@ function render() {
   }
 
   for (const [id, p] of Object.entries(players)) {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, PLAYER_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = p.color;
-    ctx.fill();
-
-    if (id === myPlayerId) {
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    ctx.fillStyle = "#e8edf4";
-    ctx.font = "11px Segoe UI, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(p.name, p.x, p.y - PLAYER_RADIUS - 4);
+    drawPlayer(id, p);
   }
 }
 
