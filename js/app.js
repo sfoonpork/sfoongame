@@ -9,7 +9,7 @@
  * SYSTEMS OVERVIEW
  * ----------------
  * 1. Networking   — PeerJS, host/guest roles, message protocol, host migration
- * 2. World        — 3000×3000 map, camera pan/zoom, coordinate transforms
+ * 2. World        — 2200×2200 map, camera pan/zoom, coordinate transforms
  * 3. Players      — WASD + click-to-move, remote smoothing, name sync
  * 4. Mulch        — Host-spawned pickups, collision, leaderboard scoring
  * 5. Rendering    — Canvas 2D loop, pibble sprites, grid, click ripples
@@ -65,8 +65,8 @@ const CLICK_EFFECT_DURATION_MS = 450;
 const CLICK_EFFECT_MAX_RADIUS = 14;
 
 // World bounds and camera
-const MAP_WIDTH = 3000;
-const MAP_HEIGHT = 3000;
+const MAP_WIDTH = 2200;
+const MAP_HEIGHT = 2200;
 const DRAG_PAN_THRESHOLD = 8;  // Pixels before pointer-down becomes pan drag
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 2.5;
