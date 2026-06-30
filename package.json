@@ -1,0 +1,12 @@
+{
+  "name": "p2p-room-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static P2P room app for itch.io",
+  "scripts": {
+    "update-peerjs": "copy node_modules\\peerjs\\dist\\peerjs.min.js js\\peerjs.min.js"
+  },
+  "devDependencies": {
+    "peerjs": "^1.5.4"
+  }
+}

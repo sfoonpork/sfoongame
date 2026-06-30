@@ -1,21 +1,60 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'"
-    />
-    <meta
-      http-equiv="X-Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'"
-    />
-    <title>Hello from Electron renderer!</title>
-  </head>
-  <body>
-    <h1>Hello from Electron renderer!</h1>
-    <p>👋</p>
-    <p id="info"></p>
-  </body>
-  <script src="./renderer.js"></script>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P2P Rooms</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <h1>P2P Rooms</h1>
+      <p class="subtitle">Host a room or join with a code</p>
+    </header>
+
+    <section id="lobby" class="card">
+      <div class="tabs">
+        <button class="tab active" data-tab="host">Host</button>
+        <button class="tab" data-tab="join">Join</button>
+      </div>
+
+      <div id="host-panel" class="panel active">
+        <label for="host-code">Room code</label>
+        <input id="host-code" type="text" placeholder="e.g. GAME42" maxlength="8" autocomplete="off" spellcheck="false">
+        <p class="hint">4–8 letters or numbers</p>
+        <button id="host-btn" class="btn btn-primary">Host Room</button>
+        <p id="host-status" class="status" aria-live="polite"></p>
+      </div>
+
+      <div id="join-panel" class="panel">
+        <label for="join-code">Room code</label>
+        <input id="join-code" type="text" placeholder="Enter host's code" maxlength="8" autocomplete="off" spellcheck="false">
+        <button id="join-btn" class="btn btn-primary">Join Room</button>
+        <p id="join-status" class="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section id="room" class="card hidden">
+      <div class="room-header">
+        <span class="badge" id="role-badge">Host</span>
+        <h2>Room <span id="active-code"></span></h2>
+      </div>
+      <p id="connection-status" class="connection waiting">Connecting peer…</p>
+
+      <div class="chat">
+        <div id="messages" class="messages"></div>
+        <form id="message-form" class="message-form">
+          <input id="message-input" type="text" placeholder="Send a message…" disabled>
+          <button type="submit" class="btn btn-secondary" disabled>Send</button>
+        </form>
+      </div>
+
+      <button id="leave-btn" class="btn btn-ghost">Leave Room</button>
+    </section>
+  </main>
+
+  <script src="js/peerjs.min.js"></script>
+  <script src="js/app.js"></script>
+</body>
 </html>
