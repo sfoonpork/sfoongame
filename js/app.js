@@ -30,6 +30,9 @@ const CLICK_EFFECT_MAX_RADIUS = 14;
 const MAP_WIDTH = 3000;
 const MAP_HEIGHT = 3000;
 const DRAG_PAN_THRESHOLD = 8;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 2.5;
+const WHEEL_ZOOM_FACTOR = 0.0015;
 
 const roleBadge = document.getElementById("role-badge");
 const connectionStatus = document.getElementById("connection-status");
@@ -74,6 +77,9 @@ let moveTarget = null;
 let clickEffects = [];
 let camera = { x: 0, y: 0 };
 let pointerState = null;
+let zoom = 1;
+const activePointers = new Map();
+let pinchState = null;
 
 function getCanvasPoint(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
@@ -85,21 +91,23 @@ function getCanvasPoint(clientX, clientY) {
 
 function worldToScreen(x, y) {
   return {
-    x: x - camera.x,
-    y: y - camera.y,
+    x: (x - camera.x) * zoom,
+    y: (y - camera.y) * zoom,
   };
 }
 
 function screenToWorld(x, y) {
   return {
-    x: x + camera.x,
-    y: y + camera.y,
+    x: x / zoom + camera.x,
+    y: y / zoom + camera.y,
   };
 }
 
 function clampCameraPosition(x, y) {
-  const maxX = Math.max(0, MAP_WIDTH - canvas.width);
-  const maxY = Math.max(0, MAP_HEIGHT - canvas.height);
+  const viewWidth = canvas.width / zoom;
+  const viewHeight = canvas.height / zoom;
+  const maxX = Math.max(0, MAP_WIDTH - viewWidth);
+  const maxY = Math.max(0, MAP_HEIGHT - viewHeight);
   return {
     x: Math.max(0, Math.min(maxX, x)),
     y: Math.max(0, Math.min(maxY, y)),
@@ -107,9 +115,25 @@ function clampCameraPosition(x, y) {
 }
 
 function centerCameraOn(x, y) {
-  const next = clampCameraPosition(x - canvas.width / 2, y - canvas.height / 2);
+  const next = clampCameraPosition(
+    x - canvas.width / (2 * zoom),
+    y - canvas.height / (2 * zoom),
+  );
   camera.x = next.x;
   camera.y = next.y;
+}
+
+function setZoomAtPoint(nextZoom, screenX, screenY) {
+  const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
+  if (Math.abs(clampedZoom - zoom) < 0.0001) return;
+  const worldBefore = screenToWorld(screenX, screenY);
+  zoom = clampedZoom;
+  const nextCamera = clampCameraPosition(
+    worldBefore.x - screenX / zoom,
+    worldBefore.y - screenY / zoom,
+  );
+  camera.x = nextCamera.x;
+  camera.y = nextCamera.y;
 }
 
 function clampPlayerPosition(x, y) {
@@ -139,10 +163,10 @@ function renderClickEffects(now) {
   for (const effect of clickEffects) {
     const screen = worldToScreen(effect.x, effect.y);
     if (
-      screen.x < -CLICK_EFFECT_MAX_RADIUS ||
-      screen.y < -CLICK_EFFECT_MAX_RADIUS ||
-      screen.x > canvas.width + CLICK_EFFECT_MAX_RADIUS ||
-      screen.y > canvas.height + CLICK_EFFECT_MAX_RADIUS
+      screen.x < -(CLICK_EFFECT_MAX_RADIUS * zoom) ||
+      screen.y < -(CLICK_EFFECT_MAX_RADIUS * zoom) ||
+      screen.x > canvas.width + CLICK_EFFECT_MAX_RADIUS * zoom ||
+      screen.y > canvas.height + CLICK_EFFECT_MAX_RADIUS * zoom
     ) {
       continue;
     }
@@ -164,7 +188,7 @@ function renderClickEffects(now) {
     }
 
     ctx.beginPath();
-    ctx.arc(screen.x, screen.y, Math.max(0, radius), 0, Math.PI * 2);
+    ctx.arc(screen.x, screen.y, Math.max(0, radius * zoom), 0, Math.PI * 2);
     ctx.fillStyle = `rgba(59, 130, 246, ${alpha * 0.35})`;
     ctx.fill();
     ctx.strokeStyle = `rgba(232, 237, 244, ${alpha})`;
@@ -251,24 +275,27 @@ function buildSpriteMask() {
 
 function drawPlayer(id, p) {
   const { w, h } = spriteSize;
+  const drawW = w * zoom;
+  const drawH = h * zoom;
   const isLocal = id === myPlayerId;
-  let labelOffset = PLAYER_HALF + 4;
+  let labelOffset = PLAYER_HALF * zoom + 4;
   const screen = worldToScreen(p.x, p.y);
 
   if (!spriteReady || !spriteMask) {
     ctx.beginPath();
-    ctx.arc(screen.x, screen.y, PLAYER_HALF * 0.35, 0, Math.PI * 2);
+    ctx.arc(screen.x, screen.y, PLAYER_HALF * 0.35 * zoom, 0, Math.PI * 2);
     ctx.fillStyle = "#e8edf4";
     ctx.fill();
   } else {
-    ctx.drawImage(spriteMask, screen.x - w / 2, screen.y - h / 2);
-    labelOffset = h / 2 + 4;
+    ctx.drawImage(spriteMask, screen.x - drawW / 2, screen.y - drawH / 2, drawW, drawH);
+    labelOffset = drawH / 2 + 4;
   }
 
   ctx.fillStyle = isLocal ? "#ffffff" : "#e8edf4";
+  const fontSize = Math.max(10, Math.min(16, 11 * Math.sqrt(zoom)));
   ctx.font = isLocal
-    ? "bold 11px Segoe UI, system-ui, sans-serif"
-    : "11px Segoe UI, system-ui, sans-serif";
+    ? `bold ${fontSize}px Segoe UI, system-ui, sans-serif`
+    : `${fontSize}px Segoe UI, system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.fillText(isLocal ? `${p.name} (you)` : p.name, screen.x, screen.y - labelOffset);
 }
@@ -1386,15 +1413,16 @@ function render(now = performance.now()) {
   ctx.strokeStyle = "#2d3f56";
   ctx.lineWidth = 1;
   const gridSize = 40;
-  const startX = -((camera.x % gridSize) + gridSize) % gridSize;
-  const startY = -((camera.y % gridSize) + gridSize) % gridSize;
-  for (let x = startX; x < canvas.width; x += gridSize) {
+  const screenGrid = gridSize * zoom;
+  const startX = -((camera.x * zoom) % screenGrid + screenGrid) % screenGrid;
+  const startY = -((camera.y * zoom) % screenGrid + screenGrid) % screenGrid;
+  for (let x = startX; x < canvas.width; x += screenGrid) {
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, canvas.height);
     ctx.stroke();
   }
-  for (let y = startY; y < canvas.height; y += gridSize) {
+  for (let y = startY; y < canvas.height; y += screenGrid) {
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(canvas.width, y);
@@ -1405,20 +1433,21 @@ function render(now = performance.now()) {
 
   for (const piece of mulchPieces) {
     const screen = worldToScreen(piece.x, piece.y);
+    const drawSize = MULCH_SIZE * zoom;
     if (
-      screen.x < -MULCH_SIZE ||
-      screen.y < -MULCH_SIZE ||
-      screen.x > canvas.width + MULCH_SIZE ||
-      screen.y > canvas.height + MULCH_SIZE
+      screen.x < -drawSize ||
+      screen.y < -drawSize ||
+      screen.x > canvas.width + drawSize ||
+      screen.y > canvas.height + drawSize
     ) {
       continue;
     }
     ctx.fillStyle = MULCH_COLOR;
     ctx.fillRect(
-      screen.x - MULCH_SIZE / 2,
-      screen.y - MULCH_SIZE / 2,
-      MULCH_SIZE,
-      MULCH_SIZE,
+      screen.x - drawSize / 2,
+      screen.y - drawSize / 2,
+      drawSize,
+      drawSize,
     );
   }
 
@@ -1441,6 +1470,21 @@ canvas.addEventListener("pointerdown", (e) => {
   if (e.pointerType === "mouse" && e.button !== 0) return;
 
   const point = getCanvasPoint(e.clientX, e.clientY);
+  activePointers.set(e.pointerId, point);
+  if (activePointers.size >= 2) {
+    const pts = Array.from(activePointers.values());
+    const dx = pts[1].x - pts[0].x;
+    const dy = pts[1].y - pts[0].y;
+    pinchState = {
+      startDistance: Math.max(1, Math.hypot(dx, dy)),
+      startZoom: zoom,
+    };
+    pointerState = null;
+    moveTarget = null;
+    canvas.setPointerCapture(e.pointerId);
+    return;
+  }
+
   pointerState = {
     pointerId: e.pointerId,
     startX: point.x,
@@ -1453,8 +1497,24 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 
 canvas.addEventListener("pointermove", (e) => {
-  if (!pointerState || pointerState.pointerId !== e.pointerId) return;
   const point = getCanvasPoint(e.clientX, e.clientY);
+  if (activePointers.has(e.pointerId)) {
+    activePointers.set(e.pointerId, point);
+  }
+
+  if (pinchState && activePointers.size >= 2) {
+    const pts = Array.from(activePointers.values());
+    const dx = pts[1].x - pts[0].x;
+    const dy = pts[1].y - pts[0].y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const midpointX = (pts[0].x + pts[1].x) / 2;
+    const midpointY = (pts[0].y + pts[1].y) / 2;
+    const targetZoom = pinchState.startZoom * (distance / pinchState.startDistance);
+    setZoomAtPoint(targetZoom, midpointX, midpointY);
+    return;
+  }
+
+  if (!pointerState || pointerState.pointerId !== e.pointerId) return;
   const dx = point.x - pointerState.startX;
   const dy = point.y - pointerState.startY;
 
@@ -1473,7 +1533,16 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 function finishPointerInteraction(e) {
-  if (!pointerState || pointerState.pointerId !== e.pointerId) return;
+  activePointers.delete(e.pointerId);
+  if (pinchState && activePointers.size < 2) {
+    pinchState = null;
+  }
+  if (!pointerState || pointerState.pointerId !== e.pointerId) {
+    if (canvas.hasPointerCapture(e.pointerId)) {
+      canvas.releasePointerCapture(e.pointerId);
+    }
+    return;
+  }
   const point = getCanvasPoint(e.clientX, e.clientY);
   if (!pointerState.dragging && myPlayerId && !isChatFocused()) {
     const world = screenToWorld(point.x, point.y);
@@ -1489,6 +1558,13 @@ function finishPointerInteraction(e) {
 
 canvas.addEventListener("pointerup", finishPointerInteraction);
 canvas.addEventListener("pointercancel", finishPointerInteraction);
+canvas.addEventListener("wheel", (e) => {
+  if (isChatFocused()) return;
+  e.preventDefault();
+  const point = getCanvasPoint(e.clientX, e.clientY);
+  const factor = Math.exp(-e.deltaY * WHEEL_ZOOM_FACTOR);
+  setZoomAtPoint(zoom * factor, point.x, point.y);
+}, { passive: false });
 
 window.addEventListener("keydown", (e) => {
   if (!myPlayerId || isChatFocused()) return;
