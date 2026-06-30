@@ -39,6 +39,11 @@
 
 /* ── Base page ─────────────────────────────────────────────────────── */
 
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   background: var(--bg);
@@ -50,9 +55,20 @@ body {
   line-height: 1.5;
 }
 
-/* Full-viewport mode while in-game (no page scroll) */
+/* Full-viewport mode while in-game — lock document scroll on iOS */
 body.in-room {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: auto;
+  padding:
+    env(safe-area-inset-top)
+    env(safe-area-inset-right)
+    env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
 }
 
 .container {
@@ -65,7 +81,10 @@ body.in-room .container {
   max-width: none;
   margin: 0;
   padding: 0;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 /* ── Legacy lobby components (unused in auto-join flow) ────────────── */
@@ -250,8 +269,10 @@ input[type="text"]::placeholder {
 
 .room-layout {
   display: flex;
-  height: 100vh;
-  width: 100vw;
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .game-area {
@@ -270,6 +291,9 @@ input[type="text"]::placeholder {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .room-info {
@@ -458,6 +482,10 @@ input[type="text"]::placeholder {
   background: var(--surface);
   border-left: 1px solid var(--border);
   padding: 1rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  touch-action: pan-y;
 }
 
 .chat-sidebar-header {
@@ -482,6 +510,9 @@ input[type="text"]::placeholder {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -525,6 +556,7 @@ input[type="text"]::placeholder {
   display: flex;
   gap: 0.5rem;
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .message-form input {
@@ -542,14 +574,58 @@ input[type="text"]::placeholder {
     flex-direction: column;
   }
 
-  .chat-sidebar {
+  .game-header {
+    flex-wrap: wrap;
+    gap: 0.4rem 0.6rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .room-info h2 {
+    font-size: 1rem;
+  }
+
+  .player-name-field {
+    order: 3;
+    flex: 1 1 100%;
+    margin-left: 0;
+    min-width: 0;
+  }
+
+  #player-name-input {
     width: 100%;
-    height: 40vh;
-    border-left: none;
-    border-top: 1px solid var(--border);
+    min-width: 0;
+  }
+
+  .connection {
+    font-size: 0.75rem;
+    max-width: 7.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .controls-hint {
+    display: none;
   }
 
   .game-area {
-    height: 60vh;
+    flex: 3;
+    min-height: 0;
+    height: auto;
+  }
+
+  .chat-sidebar {
+    flex: 2;
+    min-height: 0;
+    width: 100%;
+    height: auto;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding: 0.75rem;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  .message-form input {
+    min-width: 0;
   }
 }
