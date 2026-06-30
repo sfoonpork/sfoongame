@@ -718,8 +718,16 @@ function render() {
   }
 }
 
+function isChatFocused() {
+  return document.activeElement === messageInput;
+}
+
+function clearMovementKeys() {
+  keys.w = keys.a = keys.s = keys.d = false;
+}
+
 window.addEventListener("keydown", (e) => {
-  if (!myPlayerId) return;
+  if (!myPlayerId || isChatFocused()) return;
   const key = e.key.toLowerCase();
   if (key in keys) {
     keys[key] = true;
@@ -728,12 +736,16 @@ window.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("keyup", (e) => {
+  if (isChatFocused()) return;
   const key = e.key.toLowerCase();
   if (key in keys) {
     keys[key] = false;
     e.preventDefault();
   }
 });
+
+messageInput.addEventListener("focus", clearMovementKeys);
+messageInput.addEventListener("blur", clearMovementKeys);
 
 window.addEventListener("resize", resizeCanvas);
 
