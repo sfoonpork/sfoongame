@@ -25,6 +25,8 @@ const MULCH_RANDOM_MIN_MS = 1000;
 const MULCH_RANDOM_MAX_MS = 10000;
 const MULCH_SIZE = 14;
 const MULCH_COLOR = "#8B5A2B";
+const CLICK_EFFECT_DURATION_MS = 450;
+const CLICK_EFFECT_MAX_RADIUS = 14;
 
 const roleBadge = document.getElementById("role-badge");
 const connectionStatus = document.getElementById("connection-status");
@@ -65,6 +67,83 @@ const pendingRemovals = new Map();
 const PLAYER_RECONNECT_GRACE_MS = 2500;
 
 const keys = { w: false, a: false, s: false, d: false };
+let moveTarget = null;
+let clickEffects = [];
+
+function getCanvasPoint(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) * (canvas.width / rect.width),
+    y: (clientY - rect.top) * (canvas.height / rect.height),
+  };
+}
+
+function clampPlayerPosition(x, y) {
+  return {
+    x: Math.max(PLAYER_HALF, Math.min(canvas.width - PLAYER_HALF, x)),
+    y: Math.max(PLAYER_HALF, Math.min(canvas.height - PLAYER_HALF, y)),
+  };
+}
+
+function spawnClickEffect(x, y) {
+  clickEffects.push({
+    x,
+    y,
+    startTime: performance.now(),
+  });
+}
+
+function updateClickEffects(now) {
+  clickEffects = clickEffects.filter(
+    (effect) => now - effect.startTime < CLICK_EFFECT_DURATION_MS,
+  );
+}
+
+function renderClickEffects(now) {
+  const growEnd = 0.22;
+
+  for (const effect of clickEffects) {
+    const t = Math.min(1, (now - effect.startTime) / CLICK_EFFECT_DURATION_MS);
+    let radius;
+    let alpha;
+
+    if (t < growEnd) {
+      const u = t / growEnd;
+      const eased = 1 - Math.pow(1 - u, 3);
+      radius = CLICK_EFFECT_MAX_RADIUS * eased;
+      alpha = 0.6 * eased;
+    } else {
+      const u = (t - growEnd) / (1 - growEnd);
+      const eased = 1 - Math.pow(1 - u, 2);
+      radius = CLICK_EFFECT_MAX_RADIUS * (1 - eased * 0.9);
+      alpha = 0.6 * (1 - eased);
+    }
+
+    ctx.beginPath();
+    ctx.arc(effect.x, effect.y, Math.max(0, radius), 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(59, 130, 246, ${alpha * 0.35})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(232, 237, 244, ${alpha})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+function syncLocalPosition(p) {
+  p.targetX = p.x;
+  p.targetY = p.y;
+
+  const now = Date.now();
+  if (now - lastMoveSent >= MOVE_SEND_INTERVAL_MS) {
+    const dx = Math.abs(p.x - lastSentPos.x);
+    const dy = Math.abs(p.y - lastSentPos.y);
+    if (dx > 0.5 || dy > 0.5) {
+      sendMove(p.x, p.y);
+      lastSentPos = { x: p.x, y: p.y };
+      lastMoveSent = now;
+    }
+  }
+}
 
 const pibbleSprite = new Image();
 let spriteReady = false;
@@ -361,6 +440,8 @@ function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntent
   connectedToHost = false;
   if (!keepPlayers) {
     keys.w = keys.a = keys.s = keys.d = false;
+    moveTarget = null;
+    clickEffects = [];
   }
 
   if (!keepMessages) {
@@ -1152,10 +1233,11 @@ function startGameLoop() {
     lastFrameTime = now;
     updateLocalPlayer();
     updateRemotePlayers(dt);
+    updateClickEffects(now);
     if (role === "host") {
       checkMulchCollisions();
     }
-    render();
+    render(now);
     animationId = requestAnimationFrame(loop);
   }
   animationId = requestAnimationFrame(loop);
@@ -1183,28 +1265,36 @@ function updateLocalPlayer() {
 
   const p = players[myPlayerId];
   let moved = false;
+  const usingKeys = keys.w || keys.a || keys.s || keys.d;
 
-  if (keys.w) { p.y -= MOVE_SPEED; moved = true; }
-  if (keys.s) { p.y += MOVE_SPEED; moved = true; }
-  if (keys.a) { p.x -= MOVE_SPEED; moved = true; }
-  if (keys.d) { p.x += MOVE_SPEED; moved = true; }
+  if (usingKeys) {
+    moveTarget = null;
+    if (keys.w) { p.y -= MOVE_SPEED; moved = true; }
+    if (keys.s) { p.y += MOVE_SPEED; moved = true; }
+    if (keys.a) { p.x -= MOVE_SPEED; moved = true; }
+    if (keys.d) { p.x += MOVE_SPEED; moved = true; }
+  } else if (moveTarget) {
+    const dx = moveTarget.x - p.x;
+    const dy = moveTarget.y - p.y;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist <= MOVE_SPEED) {
+      p.x = moveTarget.x;
+      p.y = moveTarget.y;
+      moveTarget = null;
+      moved = true;
+    } else {
+      p.x += (dx / dist) * MOVE_SPEED;
+      p.y += (dy / dist) * MOVE_SPEED;
+      moved = true;
+    }
+  }
 
   if (moved) {
-    p.x = Math.max(PLAYER_HALF, Math.min(canvas.width - PLAYER_HALF, p.x));
-    p.y = Math.max(PLAYER_HALF, Math.min(canvas.height - PLAYER_HALF, p.y));
-    p.targetX = p.x;
-    p.targetY = p.y;
-
-    const now = Date.now();
-    if (now - lastMoveSent >= MOVE_SEND_INTERVAL_MS) {
-      const dx = Math.abs(p.x - lastSentPos.x);
-      const dy = Math.abs(p.y - lastSentPos.y);
-      if (dx > 0.5 || dy > 0.5) {
-        sendMove(p.x, p.y);
-        lastSentPos = { x: p.x, y: p.y };
-        lastMoveSent = now;
-      }
-    }
+    const clamped = clampPlayerPosition(p.x, p.y);
+    p.x = clamped.x;
+    p.y = clamped.y;
+    syncLocalPosition(p);
   }
 }
 
@@ -1217,7 +1307,7 @@ function sendMove(x, y) {
   }
 }
 
-function render() {
+function render(now = performance.now()) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   ctx.strokeStyle = "#2d3f56";
@@ -1235,6 +1325,8 @@ function render() {
     ctx.lineTo(canvas.width, y);
     ctx.stroke();
   }
+
+  renderClickEffects(now);
 
   for (const piece of mulchPieces) {
     ctx.fillStyle = MULCH_COLOR;
@@ -1257,7 +1349,18 @@ function isChatFocused() {
 
 function clearMovementKeys() {
   keys.w = keys.a = keys.s = keys.d = false;
+  moveTarget = null;
 }
+
+canvas.addEventListener("pointerdown", (e) => {
+  if (!myPlayerId || isChatFocused()) return;
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+
+  const point = getCanvasPoint(e.clientX, e.clientY);
+  const clamped = clampPlayerPosition(point.x, point.y);
+  moveTarget = clamped;
+  spawnClickEffect(clamped.x, clamped.y);
+});
 
 window.addEventListener("keydown", (e) => {
   if (!myPlayerId || isChatFocused()) return;
