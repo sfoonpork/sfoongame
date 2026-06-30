@@ -57,8 +57,61 @@ let migrating = false;
 let hasJoinedOnce = false;
 let intentionalLeave = false;
 let sessionEnded = false;
+const pendingRemovals = new Map();
+const PLAYER_RECONNECT_GRACE_MS = 2500;
 
 const keys = { w: false, a: false, s: false, d: false };
+
+function assignPlayerName() {
+  const usedNumbers = new Set();
+  for (const p of Object.values(players)) {
+    const match = p.name.match(/^Player (\d+)$/);
+    if (match) usedNumbers.add(Number(match[1]));
+  }
+  let n = 1;
+  while (usedNumbers.has(n)) n++;
+  return `Player ${n}`;
+}
+
+function cancelPendingRemoval(playerId) {
+  const timeout = pendingRemovals.get(playerId);
+  if (timeout) {
+    clearTimeout(timeout);
+    pendingRemovals.delete(playerId);
+  }
+}
+
+function schedulePendingRemoval(playerId) {
+  cancelPendingRemoval(playerId);
+  pendingRemovals.set(
+    playerId,
+    setTimeout(() => {
+      pendingRemovals.delete(playerId);
+      const stillConnected = [...connToPlayer.values()].includes(playerId);
+      if (!stillConnected && players[playerId]) {
+        addSystemMessage(`${players[playerId].name} left.`);
+        broadcast({ type: "player-left", id: playerId });
+        removePlayer(playerId);
+        updateConnectionStatus();
+      }
+    }, PLAYER_RECONNECT_GRACE_MS),
+  );
+}
+
+function detachConnectionsForPlayer(playerId, exceptPeerId) {
+  for (const [peerId, mappedId] of [...connToPlayer.entries()]) {
+    if (mappedId === playerId && peerId !== exceptPeerId) {
+      const conn = connections.get(peerId);
+      if (conn) conn.close();
+      connections.delete(peerId);
+      connToPlayer.delete(peerId);
+    }
+  }
+}
+
+function isPlayerConnected(playerId) {
+  return [...connToPlayer.values()].includes(playerId);
+}
 
 function getOrCreatePlayerId() {
   let id = sessionStorage.getItem("playerId");
@@ -114,6 +167,11 @@ function destroyPeer({ keepPlayers = false, keepMessages = false, preserveIntent
   if (!preserveIntentionalLeave) {
     intentionalLeave = false;
   }
+
+  for (const timeout of pendingRemovals.values()) {
+    clearTimeout(timeout);
+  }
+  pendingRemovals.clear();
 
   if (!keepPlayers) {
     stopGameLoop();
@@ -357,7 +415,7 @@ function handleMessage(data, fromConn) {
     case "leave":
       if (role === "host" && fromConn) {
         const playerId = msg.playerId || connToPlayer.get(fromConn.peer);
-        removeConnectedPlayer(playerId, fromConn);
+        removeConnectedPlayer(playerId, fromConn, { immediate: true });
       } else if (role === "guest" && msg.playerId && players[msg.playerId]) {
         addSystemMessage(`${players[msg.playerId].name} left.`);
         removePlayer(msg.playerId);
@@ -367,6 +425,8 @@ function handleMessage(data, fromConn) {
 }
 
 function handleGuestHello(connection, playerId) {
+  cancelPendingRemoval(playerId);
+
   const isReconnect = !!players[playerId];
 
   if (!isReconnect) {
@@ -375,8 +435,10 @@ function handleGuestHello(connection, playerId) {
       connection.close();
       return;
     }
-    spawnPlayer(playerId, `Player ${Object.keys(players).length}`);
+    spawnPlayer(playerId, assignPlayerName());
     players[playerId].joinOrder = nextJoinOrder++;
+  } else {
+    detachConnectionsForPlayer(playerId, connection.peer);
   }
 
   connToPlayer.set(connection.peer, playerId);
@@ -409,8 +471,10 @@ function applyWelcome(msg) {
     players[myPlayerId] = {
       x: center.x,
       y: center.y,
+      targetX: center.x,
+      targetY: center.y,
       color: PLAYER_COLORS[Object.keys(players).length % PLAYER_COLORS.length],
-      name: role === "host" ? "Host" : `Player ${Object.keys(players).length}`,
+      name: assignPlayerName(),
       joinOrder: nextJoinOrder++,
     };
   }
@@ -502,16 +566,28 @@ function removeHostPlayer() {
   }
 }
 
-function removeConnectedPlayer(playerId, connection) {
+function removeConnectedPlayer(playerId, connection, { immediate = false } = {}) {
   if (connection) {
     connections.delete(connection.peer);
     connToPlayer.delete(connection.peer);
   }
 
-  if (playerId && players[playerId]) {
+  if (!playerId || !players[playerId]) {
+    updateConnectionStatus();
+    return;
+  }
+
+  if (immediate) {
+    cancelPendingRemoval(playerId);
     addSystemMessage(`${players[playerId].name} left.`);
     broadcast({ type: "player-left", id: playerId });
     removePlayer(playerId);
+    updateConnectionStatus();
+    return;
+  }
+
+  if (!isPlayerConnected(playerId)) {
+    schedulePendingRemoval(playerId);
   }
 
   updateConnectionStatus();
@@ -539,8 +615,12 @@ function leaveSession({ reconnect = false } = {}) {
   if (sessionEnded) return;
 
   intentionalLeave = true;
-  notifyLeave();
-  sessionStorage.removeItem("playerId");
+
+  if (!reconnect) {
+    notifyLeave();
+    sessionStorage.removeItem("playerId");
+  }
+
   destroyPeer({ preserveIntentionalLeave: true });
 
   if (reconnect) {
