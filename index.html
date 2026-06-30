@@ -17,9 +17,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Pibb Game</title>
   <link rel="stylesheet" href="css/style.css">
+  <meta name="description" content="Pibb Game — free multiplayer browser game. Move, collect mulch, and chat with other players.">
+  <meta name="google-adsense-account" content="ca-pub-9051438561139115">
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('consent', 'default', {
+      ad_storage: 'denied',
+      ad_user_data: 'denied',
+      ad_personalization: 'denied',
+      analytics_storage: 'denied',
+      wait_for_update: 500
+    });
+  </script>
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9051438561139115"
      crossorigin="anonymous"></script>
-  <meta name="google-adsense-account" content="ca-pub-9051438561139115">
 </head>
 <!-- body.in-room: full-viewport game layout (see style.css) -->
 <body class="in-room">
@@ -73,14 +85,31 @@
           <button type="submit" class="btn btn-secondary" disabled>Send</button>
         </form>
         <button id="leave-btn" class="btn btn-ghost">Leave Game</button>
+        <nav class="site-links" aria-label="Site information">
+          <a href="about.html">About</a>
+          <span aria-hidden="true">·</span>
+          <a href="privacy.html">Privacy</a>
+          <span aria-hidden="true">·</span>
+          <a href="terms.html">Terms</a>
+        </nav>
       </aside>
     </section>
-
-
-
-
   </main>
 
+  <div id="consent-banner" class="consent-banner hidden" role="dialog" aria-labelledby="consent-title" aria-hidden="true">
+    <div class="consent-banner-inner">
+      <p id="consent-title">
+        We use cookies for advertising through Google AdSense.
+        <a href="privacy.html">Privacy Policy</a>
+      </p>
+      <div class="consent-banner-actions">
+        <button type="button" id="consent-reject" class="btn btn-secondary">Reject</button>
+        <button type="button" id="consent-accept" class="btn btn-primary">Accept</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/consent.js"></script>
   <!-- PeerJS: WebRTC signaling + data channels (vendored) -->
   <script src="js/peerjs.min.js"></script>
   <!-- All game logic, networking, and rendering -->
